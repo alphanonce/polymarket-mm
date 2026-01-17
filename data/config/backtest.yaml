@@ -1,0 +1,22 @@
+# Backtest Configuration
+
+data:
+  s3_bucket: "an-trading-research"
+  s3_prefix: "polymarket/trades/crypto/1h"
+  local_cache_dir: "data/s3_cache"
+  # local_data_dir: "data/trades"  # Uncomment to use local files
+
+filter:
+  # assets: ["btc", "eth"]  # Filter specific assets, null = all
+  # start_date: "2024-01"
+  # end_date: "2024-12"
+
+simulation:
+  maker_fee: 0.0
+  # taker_fee not used - post-only orders only
+
+strategy:
+  quote_interval_sec: 0.5  # Quote update interval (seconds)
+  max_position: 100.0
+  base_spread: 0.02  # 2% spread
+  base_size: 10.0

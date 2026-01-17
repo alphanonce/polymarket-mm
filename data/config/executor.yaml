@@ -1,0 +1,45 @@
+# Polymarket Executor Configuration
+
+polymarket:
+  # API credentials (override with environment variables)
+  api_key: ""
+  api_secret: ""
+  passphrase: ""
+
+  # Endpoints
+  endpoint: "https://clob.polymarket.com"
+  ws_endpoint: "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+
+  # Markets to trade (token IDs)
+  markets:
+    # Example: BTC price prediction markets
+    # - "0x1234..."
+    # - "0x5678..."
+
+binance:
+  # Symbols for external price reference
+  symbols:
+    - "BTCUSDT"
+    - "ETHUSDT"
+
+chainlink:
+  # Polygon RPC URL for Chainlink feeds
+  # rpc_url: "https://polygon-rpc.com"
+
+  # Price feeds to monitor
+  feeds:
+    - "BTC/USD"
+    - "ETH/USD"
+
+risk:
+  # Maximum position per asset
+  max_position_per_asset: 500.0
+
+  # Maximum total exposure across all assets
+  max_total_exposure: 5000.0
+
+  # Maximum single order size
+  max_order_size: 100.0
+
+  # Minimum order size
+  min_order_size: 1.0
