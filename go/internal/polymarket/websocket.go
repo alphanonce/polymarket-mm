@@ -211,9 +211,9 @@ func (c *WSClient) readLoop() {
 				c.onError(err)
 			}
 
-			// Attempt reconnect
+			// Attempt reconnect - return to prevent double read loops
 			c.reconnect()
-			continue
+			return
 		}
 
 		c.handleMessage(data)

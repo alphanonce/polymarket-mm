@@ -134,7 +134,7 @@ func (c *SpotClient) Connect(symbols []string) error {
 		streams = append(streams, lower+"@bookTicker")
 		streams = append(streams, lower+"@miniTicker")
 	}
-	url := c.endpoint + "/" + strings.Join(streams, "/")
+	url := strings.TrimSuffix(c.endpoint, "/ws") + "/stream?streams=" + strings.Join(streams, "/")
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
@@ -212,8 +212,11 @@ func (c *SpotClient) readLoop() {
 				c.onError(err)
 			}
 
+			if c.conn != nil {
+				_ = c.conn.Close()
+			}
 			c.reconnect()
-			continue
+			return
 		}
 
 		c.handleMessage(data)
