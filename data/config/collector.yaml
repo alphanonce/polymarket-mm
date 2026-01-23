@@ -1,0 +1,24 @@
+# Data Collector Configuration
+
+polymarket:
+  ws_endpoint: "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+
+  # Markets to collect data for
+  markets:
+    # - "0x1234..."
+
+binance:
+  # Symbols to collect
+  symbols:
+    - "BTCUSDT"
+    - "ETHUSDT"
+
+collector:
+  # Output directory for snapshots
+  output_dir: "data/snapshots"
+
+  # Snapshot interval (e.g., "100ms", "1s")
+  snapshot_interval: "100ms"
+
+  # Flush to disk interval
+  flush_interval: "1m"

@@ -1,0 +1,63 @@
+# Python Strategy Configuration
+
+# Tick interval in milliseconds
+tick_interval_ms: 10.0
+
+# Markets to trade (Polymarket token IDs)
+markets:
+  # - "0x1234..."
+
+# External price mappings (asset_id -> binance symbol)
+external_prices:
+  # "0x1234...": "BTCUSDT"
+
+# Quote model configuration
+quote:
+  # Base spread (as fraction of price)
+  base_spread: 0.02
+
+  # Minimum spread
+  min_spread: 0.01
+
+  # Maximum spread
+  max_spread: 0.15
+
+  # Inventory skew factor
+  inventory_skew: 0.5
+
+  # Maximum inventory for full skew
+  max_inventory: 500.0
+
+# Size model configuration
+size:
+  # Base order size
+  base_size: 10.0
+
+  # Maximum order size
+  max_size: 100.0
+
+  # Minimum order size
+  min_size: 1.0
+
+  # Maximum position
+  max_position: 500.0
+
+  # Size reduction rate near max position
+  size_reduction_rate: 0.5
+
+# Risk limits
+risk:
+  # Maximum open orders per market
+  max_open_orders: 10
+
+  # Maximum position per market
+  max_position_per_market: 500.0
+
+  # Maximum total exposure
+  max_total_exposure: 5000.0
+
+  # Quote refresh interval in milliseconds
+  quote_refresh_interval_ms: 1000.0
+
+  # Cancel stale quotes after milliseconds
+  cancel_stale_quotes_ms: 5000.0
