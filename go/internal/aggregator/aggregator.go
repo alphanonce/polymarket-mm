@@ -3,6 +3,7 @@ package aggregator
 
 import (
 	"context"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -206,27 +207,47 @@ func (a *Aggregator) convertPolyBook(assetID string, book *polymarket.OrderbookS
 		TimestampNs: uint64(time.Now().UnixNano()),
 	}
 
-	// Convert bids
+	// Collect and sort bids (descending by price - best bid first)
+	bidPrices := make([]string, 0, len(book.Bids))
+	for price := range book.Bids {
+		bidPrices = append(bidPrices, price)
+	}
+	sort.Slice(bidPrices, func(i, j int) bool {
+		pi, _ := strconv.ParseFloat(bidPrices[i], 64)
+		pj, _ := strconv.ParseFloat(bidPrices[j], 64)
+		return pi > pj // descending
+	})
+
 	bidIdx := 0
-	for price, size := range book.Bids {
+	for _, price := range bidPrices {
 		if bidIdx >= shm.MaxOrderbookLevels {
 			break
 		}
 		p, _ := strconv.ParseFloat(price, 64)
-		s, _ := strconv.ParseFloat(size, 64)
+		s, _ := strconv.ParseFloat(book.Bids[price], 64)
 		mb.Bids[bidIdx] = shm.PriceLevel{Price: p, Size: s}
 		bidIdx++
 	}
 	mb.BidLevels = uint32(bidIdx)
 
-	// Convert asks
+	// Collect and sort asks (ascending by price - best ask first)
+	askPrices := make([]string, 0, len(book.Asks))
+	for price := range book.Asks {
+		askPrices = append(askPrices, price)
+	}
+	sort.Slice(askPrices, func(i, j int) bool {
+		pi, _ := strconv.ParseFloat(askPrices[i], 64)
+		pj, _ := strconv.ParseFloat(askPrices[j], 64)
+		return pi < pj // ascending
+	})
+
 	askIdx := 0
-	for price, size := range book.Asks {
+	for _, price := range askPrices {
 		if askIdx >= shm.MaxOrderbookLevels {
 			break
 		}
 		p, _ := strconv.ParseFloat(price, 64)
-		s, _ := strconv.ParseFloat(size, 64)
+		s, _ := strconv.ParseFloat(book.Asks[price], 64)
 		mb.Asks[askIdx] = shm.PriceLevel{Price: p, Size: s}
 		askIdx++
 	}
