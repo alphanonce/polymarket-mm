@@ -162,6 +162,14 @@ The datalake contains two main data types:
 - Original: `btc-updown-15m-1768665600` (includes epoch timestamp)
 - Normalized (S3 path): `btc-updown-15m`
 
+## Key Analysis Modules
+
+### `python/analysis/`
+- `bs_validator.py`: Black-Scholes binary option pricing validation
+- `bs_eval_orderbook.py`: BS evaluation using CSV orderbook data
+- `datalake_loader.py`: Load orderbook data from datalake
+- `binance_cache.py`: Cached Binance klines for volatility
+
 ## CRITICAL: Price Source for 15-Minute Markets
 
 **The 15-minute updown markets use Chainlink (RTDS) as the reference price source.**

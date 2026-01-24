@@ -3,6 +3,8 @@ __pycache__/
 
 # Generated data files
 python/data/
+data/datalake/
+data/analysis_output/
 *.py[codz]
 *$py.class
 
