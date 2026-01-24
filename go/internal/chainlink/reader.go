@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,7 +121,7 @@ func NewReader(cfg ReaderConfig) (*Reader, error) {
 		cfg.PollInterval = 1 * time.Second
 	}
 
-	parsedABI, err := abi.JSON([]byte(aggregatorV3ABI))
+	parsedABI, err := abi.JSON(strings.NewReader(aggregatorV3ABI))
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse ABI: %w", err)
 	}
