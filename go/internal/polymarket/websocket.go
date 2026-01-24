@@ -213,7 +213,7 @@ func (c *WSClient) readLoop() {
 
 			// Attempt reconnect
 			c.reconnect()
-			continue
+			return
 		}
 
 		c.handleMessage(data)
