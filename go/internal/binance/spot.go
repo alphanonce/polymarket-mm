@@ -212,6 +212,9 @@ func (c *SpotClient) readLoop() {
 				c.onError(err)
 			}
 
+			if c.conn != nil {
+				_ = c.conn.Close()
+			}
 			c.reconnect()
 			return
 		}
