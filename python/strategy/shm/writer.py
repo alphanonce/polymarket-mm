@@ -74,28 +74,41 @@ class SHMWriter:
         return SharedMemoryLayout.from_buffer_copy(self._mm)
 
     def _write_signals_section(self, num_signals: int, signals: list[OrderSignal]) -> None:
-        """Write the signals section to shared memory."""
+        """Write only the signals section to shared memory (not the entire layout)."""
         if self._mm is None:
             raise RuntimeError("Not connected to shared memory")
 
-        # Calculate offset to num_signals field
-        # This is a simplified approach - in production you'd calculate exact offsets
+        # Read current layout to get current signal_sequence
         layout = self._read_layout()
+        new_signal_sequence = layout.signal_sequence + 1
+        new_signal_timestamp_ns = time.time_ns()
 
-        # Update signal count
-        layout.num_signals = num_signals
-        layout.signal_timestamp_ns = time.time_ns()
-        layout.signal_sequence += 1
+        # Calculate offsets using ctypes
+        signal_sequence_offset = SharedMemoryLayout.signal_sequence.offset
+        signal_timestamp_ns_offset = SharedMemoryLayout.signal_timestamp_ns.offset
+        num_signals_offset = SharedMemoryLayout.num_signals.offset
+        signals_offset = SharedMemoryLayout.signals.offset
 
-        # Copy signals
-        for i, sig in enumerate(signals):
-            if i >= MAX_SIGNALS:
-                break
-            layout.signals[i] = sig
+        # Write signal_sequence (uint32, 4 bytes)
+        self._mm.seek(signal_sequence_offset)
+        self._mm.write(new_signal_sequence.to_bytes(4, byteorder="little"))
 
-        # Write entire layout back
-        self._mm.seek(0)
-        self._mm.write(bytes(layout))
+        # Write signal_timestamp_ns (uint64, 8 bytes)
+        self._mm.seek(signal_timestamp_ns_offset)
+        self._mm.write(new_signal_timestamp_ns.to_bytes(8, byteorder="little"))
+
+        # Write num_signals (uint32, 4 bytes)
+        self._mm.seek(num_signals_offset)
+        self._mm.write(num_signals.to_bytes(4, byteorder="little"))
+
+        # Write signals array
+        self._mm.seek(signals_offset)
+        for i in range(MAX_SIGNALS):
+            if i < len(signals):
+                self._mm.write(bytes(signals[i]))
+            else:
+                # Write empty signal
+                self._mm.write(bytes(OrderSignal()))
 
     def _next_signal_id(self) -> int:
         """Generate next signal ID."""
