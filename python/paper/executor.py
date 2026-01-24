@@ -5,12 +5,16 @@ Intercepts order signals and simulates execution against live orderbook.
 """
 
 import time
-from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import structlog
 
 from strategy.shm.types import SIDE_BUY, SIDE_SELL, MarketState
+
+if TYPE_CHECKING:
+    from paper.position_tracker import PositionTracker
+    from paper.supabase_store import SupabaseStore
 
 logger = structlog.get_logger()
 

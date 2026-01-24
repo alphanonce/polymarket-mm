@@ -5,7 +5,7 @@ Tracks positions, calculates PnL, and maintains equity curve.
 """
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 import structlog
