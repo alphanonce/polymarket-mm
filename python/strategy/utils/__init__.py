@@ -4,7 +4,7 @@ Utility Functions
 Reusable math and helper functions for strategy models.
 """
 
-from strategy.utils.black_scholes import bs_binary_call, bs_binary_put, norm_cdf
+from strategy.utils.distributions import bs_binary_call, bs_binary_put, norm_cdf
 from strategy.utils.polymarket import (
     DEFAULT_MIN_SIZE,
     DEFAULT_SIZE_TICK,
