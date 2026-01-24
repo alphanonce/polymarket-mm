@@ -1,0 +1,55 @@
+# Paper Trading Configuration
+
+# Polymarket WebSocket
+polymarket:
+  ws_endpoint: "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+  markets: []  # Add market asset IDs to track
+
+# Binance price feeds
+binance:
+  symbols:
+    - "BTCUSDT"
+    - "ETHUSDT"
+    - "SOLUSDT"
+    - "XRPUSDT"
+
+# Chainlink RTDS (optional - requires Polygon RPC)
+chainlink:
+  rpc_url: ""  # Set POLYGON_RPC_URL env var or configure here
+
+# Supabase configuration
+supabase:
+  url: ""  # Set SUPABASE_URL env var or configure here
+  api_key: ""  # Set SUPABASE_KEY env var or configure here
+
+# Paper trading settings
+paper:
+  # Initial paper trading equity
+  initial_equity: 10000.0
+
+  # Strategy tick interval (how often to check market and process orders)
+  tick_interval_ms: 100
+
+  # Snapshot intervals
+  equity_snapshot_interval_s: 60
+  metrics_sync_interval_s: 60
+  position_sync_interval_s: 10
+  market_snapshot_interval_s: 5
+
+  # Data persistence mode
+  # use_shm: Write to SHM for Go service to persist (recommended)
+  # use_direct_supabase: Python directly writes to Supabase (alternative)
+  use_shm: true
+  use_direct_supabase: false
+
+  # Batching settings (for Go service)
+  trade_batch_size: 50
+  market_snapshot_batch_size: 100
+  flush_interval_s: 5
+
+# Risk settings
+risk:
+  max_position_per_asset: 1000.0
+  max_total_exposure: 5000.0
+  max_order_size: 100.0
+  min_order_size: 1.0
