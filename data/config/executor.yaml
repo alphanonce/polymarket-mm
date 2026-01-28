@@ -10,17 +10,29 @@ polymarket:
   endpoint: "https://clob.polymarket.com"
   ws_endpoint: "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 
-  # Markets to trade (token IDs)
-  markets:
-    # Example: BTC price prediction markets
-    # - "0x1234..."
-    # - "0x5678..."
+  # Static markets to trade (token IDs)
+  # These are subscribed on startup in addition to discovered markets
+  markets: []
+
+# Market discovery - automatically finds updown markets
+discovery:
+  enabled: true
+  poll_interval_s: 30
+  assets:
+    - btc
+    - eth
+    - sol
+    - xrp
+  timeframes:
+    - "15m"
 
 binance:
   # Symbols for external price reference
   symbols:
     - "BTCUSDT"
     - "ETHUSDT"
+    - "SOLUSDT"
+    - "XRPUSDT"
 
 chainlink:
   # Polygon RPC URL for Chainlink feeds
@@ -30,6 +42,8 @@ chainlink:
   feeds:
     - "BTC/USD"
     - "ETH/USD"
+    - "SOL/USD"
+    - "XRP/USD"
 
 risk:
   # Maximum position per asset
