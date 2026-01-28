@@ -1,0 +1,31 @@
+# Paper Trading Dashboard Configuration
+# Monitoring-only mode: reads strategy state from Supabase
+
+dashboard:
+  host: "0.0.0.0"
+  port: 8080
+  external_url: ""  # Set for external access, e.g., "https://paper.example.com"
+
+  # WebSocket update frequency (for client broadcasts)
+  ws_update_interval_ms: 200
+
+  # Path to strategies config (paper.yaml)
+  # Strategies are defined here, runtime data comes from Supabase
+  strategies_config_path: "../data/config/paper.yaml"
+
+  # State poller settings (reads from Supabase)
+  state_poller:
+    poll_interval_ms: 500        # How often to poll Supabase for updates
+    equity_history_limit: 500    # Max equity history points to fetch
+    trade_history_limit: 50      # Max recent trades to fetch
+    quote_history_limit: 500     # Max quote history points per market
+
+# Supabase configuration (required for dashboard to work)
+# Uses environment variables SUPABASE_URL and SUPABASE_KEY if not set here
+supabase:
+  url: ""
+  api_key: ""
+
+# NOTE: Strategy execution is now handled separately by paper.runner
+# Run strategies with: python -m paper.runner --config ../data/config/executor.yaml
+# This dashboard only monitors strategies that write to Supabase
