@@ -81,7 +81,7 @@ func NewDiscoveryService(cfg DiscoveryConfig) *DiscoveryService {
 	if cfg.Logger == nil {
 		cfg.Logger, _ = zap.NewProduction()
 	}
-	if cfg.PollInterval == 0 {
+	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = 30 * time.Second
 	}
 	if len(cfg.SupportedTimeframes) == 0 {
