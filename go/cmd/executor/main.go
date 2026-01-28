@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/alphanonce/polymarket-mm/internal/aggregator"
 	"github.com/alphanonce/polymarket-mm/internal/binance"
@@ -27,6 +28,14 @@ type Config struct {
 		WSEndpoint string   `yaml:"ws_endpoint"`
 		Markets    []string `yaml:"markets"`
 	} `yaml:"polymarket"`
+
+	// Market discovery settings
+	Discovery struct {
+		Enabled     bool     `yaml:"enabled"`
+		PollIntervalS int    `yaml:"poll_interval_s"`
+		Assets      []string `yaml:"assets"`
+		Timeframes  []string `yaml:"timeframes"`
+	} `yaml:"discovery"`
 
 	Binance struct {
 		Symbols []string `yaml:"symbols"`
@@ -85,7 +94,7 @@ func main() {
 	}
 	defer polyWS.Close()
 
-	// Subscribe to markets
+	// Subscribe to static markets from config
 	for _, market := range cfg.Polymarket.Markets {
 		if err := polyWS.SubscribeBook(market); err != nil {
 			logger.Error("Failed to subscribe to book", zap.String("market", market), zap.Error(err))
@@ -93,6 +102,52 @@ func main() {
 		if err := polyWS.SubscribeTrades(market); err != nil {
 			logger.Error("Failed to subscribe to trades", zap.String("market", market), zap.Error(err))
 		}
+	}
+
+	// Initialize market discovery service
+	var discovery *polymarket.DiscoveryService
+	if cfg.Discovery.Enabled {
+		discoveryCfg := polymarket.DiscoveryConfig{
+			Logger: logger,
+		}
+		if cfg.Discovery.PollIntervalS > 0 {
+			discoveryCfg.PollInterval = time.Duration(cfg.Discovery.PollIntervalS) * time.Second
+		}
+		if len(cfg.Discovery.Assets) > 0 {
+			discoveryCfg.SupportedAssets = cfg.Discovery.Assets
+		}
+		if len(cfg.Discovery.Timeframes) > 0 {
+			discoveryCfg.SupportedTimeframes = cfg.Discovery.Timeframes
+		}
+
+		discovery = polymarket.NewDiscoveryService(discoveryCfg)
+
+		// Subscribe to newly discovered markets in batch
+		// (Polymarket WebSocket only sends initial snapshots for tokens in the same subscription message)
+		discovery.OnBatchDiscovered(func(markets []*polymarket.DiscoveredMarket) {
+			// Collect all token IDs
+			tokenIDs := make([]string, 0, len(markets)*2)
+			for _, market := range markets {
+				tokenIDs = append(tokenIDs, market.TokenIDUp, market.TokenIDDown)
+			}
+
+			// Subscribe to all tokens in one batch
+			if err := polyWS.SubscribeBooksMany(tokenIDs); err != nil {
+				logger.Error("Failed to batch subscribe to books", zap.Error(err))
+			}
+
+			// Log individual markets
+			for _, market := range markets {
+				logger.Info("Subscribed to market",
+					zap.String("slug", market.Slug),
+					zap.String("tokenUp", market.TokenIDUp[:20]+"..."),
+					zap.String("tokenDown", market.TokenIDDown[:20]+"..."),
+				)
+			}
+		})
+
+		// Note: discovery.Start() is called later after aggregator is initialized
+		defer discovery.Stop()
 	}
 
 	// Initialize Binance client
@@ -137,6 +192,12 @@ func main() {
 		logger.Fatal("Failed to start aggregator", zap.Error(err))
 	}
 	defer agg.Stop()
+
+	// Start market discovery after aggregator is initialized
+	// (so callbacks are set before receiving initial snapshots)
+	if discovery != nil {
+		discovery.Start()
+	}
 
 	// Initialize risk manager
 	riskMgr := executor.NewRiskManager(executor.RiskConfig{
