@@ -21,7 +21,8 @@ from paper.executor import PaperExecutor
 from paper.metrics import MetricsCalculator
 from paper.position_tracker import PositionTracker
 from paper.shm_paper import PaperSHMWriter
-from paper.supabase_store import SupabaseConfig, SupabaseStore
+from paper.supabase_store import AsyncSupabaseStore, SupabaseConfig, SupabaseStore
+from paper.token_registry import TokenIdRegistry, get_global_registry
 from strategy.shm.reader import SHMReader
 from strategy.shm.types import SIDE_BUY, SIDE_SELL, MarketState
 
@@ -79,6 +80,7 @@ class PaperTradingRunner:
         self._position_tracker: Optional[PositionTracker] = None
         self._paper_executor: Optional[PaperExecutor] = None
         self._metrics: Optional[MetricsCalculator] = None
+        self._token_registry: TokenIdRegistry = get_global_registry()
 
         # Tracking
         self._last_equity_snapshot = 0.0
@@ -106,7 +108,8 @@ class PaperTradingRunner:
 
         # Initialize Supabase store (for executor)
         if self.config.use_direct_supabase and self.config.supabase_url:
-            self._supabase_store = SupabaseStore(
+            # Use AsyncSupabaseStore to prevent tick overruns from blocking I/O
+            self._supabase_store = AsyncSupabaseStore(
                 SupabaseConfig(
                     url=self.config.supabase_url,
                     api_key=self.config.supabase_key,
@@ -115,6 +118,10 @@ class PaperTradingRunner:
             if not self._supabase_store.health_check():
                 self._logger.error("Supabase health check failed")
                 self._supabase_store = None
+            else:
+                # Start the background writer thread
+                self._supabase_store.start()
+                self._logger.info("Started async Supabase store")
         else:
             # Create a dummy store that just logs
             self._supabase_store = _DummyStore()
@@ -145,8 +152,15 @@ class PaperTradingRunner:
         if self._shm_reader:
             self._shm_reader.close()
 
-        if self._supabase_store and hasattr(self._supabase_store, "close"):
-            self._supabase_store.close()
+        if self._supabase_store:
+            # Wait for pending writes before closing
+            if isinstance(self._supabase_store, AsyncSupabaseStore):
+                pending = self._supabase_store.pending_writes
+                if pending > 0:
+                    self._logger.info("Waiting for pending Supabase writes", pending=pending)
+                    self._supabase_store.wait_for_writes(timeout=10.0)
+            if hasattr(self._supabase_store, "close"):
+                self._supabase_store.close()
 
     async def run_async(self) -> None:
         """Run the paper trading loop asynchronously."""
@@ -265,8 +279,12 @@ class PaperTradingRunner:
                 mid_price = (best_bid + best_ask) / 2
                 spread = best_ask - best_bid
 
-                # Get slug from position or derive from asset_id
-                slug = position.slug if position else asset_id[:32]
+                # Get slug from position or use registry lookup
+                slug = (
+                    position.slug
+                    if position
+                    else self._token_registry.get_slug_or_fallback(asset_id, "paper")
+                )
 
                 self._paper_shm.update_quote(
                     slug=slug,
@@ -345,7 +363,11 @@ class PaperTradingRunner:
 
             position = self._position_tracker.positions.get(asset_id) if self._position_tracker else None
             inventory = position.size if position else 0.0
-            slug = position.slug if position else asset_id[:32]
+            slug = (
+                position.slug
+                if position
+                else self._token_registry.get_slug_or_fallback(asset_id, "paper")
+            )
 
             best_bid = market.bids[0][0]
             best_ask = market.asks[0][0]
@@ -365,6 +387,15 @@ class PaperTradingRunner:
     def stop(self) -> None:
         """Stop the runner."""
         self._running = False
+
+    def register_market(self, market_info: dict) -> None:
+        """
+        Register a market's token IDs for slug lookup.
+
+        Args:
+            market_info: Dict with slug, asset, timeframe, up_token_id, down_token_id
+        """
+        self._token_registry.register_from_market_info(market_info)
 
     # Public API for placing orders (called by strategy)
     def place_order(
@@ -418,6 +449,15 @@ class _DummyStore:
         pass
 
     def upsert_position(self, position: dict) -> None:
+        pass
+
+    def insert_equity_snapshot(self, equity: float, cash: float, position_value: float) -> None:
+        pass
+
+    def upsert_metrics(self, **kwargs: object) -> None:
+        pass
+
+    def insert_market_snapshot(self, **kwargs: object) -> None:
         pass
 
 
