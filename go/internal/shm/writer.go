@@ -3,6 +3,7 @@ package shm
 import (
 	"fmt"
 	"os"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -14,6 +15,7 @@ type Writer struct {
 	file   *os.File
 	data   []byte
 	layout *SharedMemoryLayout
+	mu     sync.Mutex // protects concurrent updates to markets/prices/positions
 }
 
 // NewWriter creates a new shared memory writer
@@ -84,11 +86,14 @@ func (w *Writer) Layout() *SharedMemoryLayout {
 
 // UpdateMarket updates or adds a market book
 func (w *Writer) UpdateMarket(book MarketBook) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	assetID := AssetIDToString(book.AssetID)
 
 	// Find existing or add new
 	idx := -1
-	numMarkets := int(atomic.LoadUint32(&w.layout.NumMarkets))
+	numMarkets := int(w.layout.NumMarkets)
 	for i := 0; i < numMarkets; i++ {
 		if AssetIDToString(w.layout.Markets[i].AssetID) == assetID {
 			idx = i
@@ -101,7 +106,7 @@ func (w *Writer) UpdateMarket(book MarketBook) error {
 			return fmt.Errorf("max markets reached")
 		}
 		idx = numMarkets
-		atomic.StoreUint32(&w.layout.NumMarkets, uint32(numMarkets+1))
+		w.layout.NumMarkets = uint32(numMarkets + 1)
 	}
 
 	// Update the market
@@ -117,11 +122,14 @@ func (w *Writer) UpdateMarket(book MarketBook) error {
 
 // UpdateExternalPrice updates or adds an external price
 func (w *Writer) UpdateExternalPrice(price ExternalPrice) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	symbol := SymbolToString(price.Symbol)
 
 	// Find existing or add new
 	idx := -1
-	numPrices := int(atomic.LoadUint32(&w.layout.NumExternalPrices))
+	numPrices := int(w.layout.NumExternalPrices)
 	for i := 0; i < numPrices; i++ {
 		if SymbolToString(w.layout.ExternalPrices[i].Symbol) == symbol {
 			idx = i
@@ -134,7 +142,7 @@ func (w *Writer) UpdateExternalPrice(price ExternalPrice) error {
 			return fmt.Errorf("max external prices reached")
 		}
 		idx = numPrices
-		atomic.StoreUint32(&w.layout.NumExternalPrices, uint32(numPrices+1))
+		w.layout.NumExternalPrices = uint32(numPrices + 1)
 	}
 
 	// Update the price
@@ -150,11 +158,14 @@ func (w *Writer) UpdateExternalPrice(price ExternalPrice) error {
 
 // UpdatePosition updates or adds a position
 func (w *Writer) UpdatePosition(pos Position) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	assetID := AssetIDToString(pos.AssetID)
 
 	// Find existing or add new
 	idx := -1
-	numPositions := int(atomic.LoadUint32(&w.layout.NumPositions))
+	numPositions := int(w.layout.NumPositions)
 	for i := 0; i < numPositions; i++ {
 		if AssetIDToString(w.layout.Positions[i].AssetID) == assetID {
 			idx = i
@@ -167,7 +178,7 @@ func (w *Writer) UpdatePosition(pos Position) error {
 			return fmt.Errorf("max positions reached")
 		}
 		idx = numPositions
-		atomic.StoreUint32(&w.layout.NumPositions, uint32(numPositions+1))
+		w.layout.NumPositions = uint32(numPositions + 1)
 	}
 
 	w.layout.Positions[idx] = pos
@@ -181,7 +192,10 @@ func (w *Writer) UpdatePosition(pos Position) error {
 
 // AddOpenOrder adds a new open order
 func (w *Writer) AddOpenOrder(order OpenOrder) error {
-	numOrders := int(atomic.LoadUint32(&w.layout.NumOpenOrders))
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	numOrders := int(w.layout.NumOpenOrders)
 	if numOrders >= MaxOpenOrders {
 		return fmt.Errorf("max open orders reached")
 	}
@@ -189,14 +203,17 @@ func (w *Writer) AddOpenOrder(order OpenOrder) error {
 	order.CreatedAtNs = uint64(time.Now().UnixNano())
 	order.UpdatedAtNs = order.CreatedAtNs
 	w.layout.OpenOrders[numOrders] = order
-	atomic.StoreUint32(&w.layout.NumOpenOrders, uint32(numOrders+1))
+	w.layout.NumOpenOrders = uint32(numOrders + 1)
 
 	return nil
 }
 
 // UpdateOpenOrder updates an existing open order
 func (w *Writer) UpdateOpenOrder(orderID string, status uint8, filledSize float64) error {
-	numOrders := int(atomic.LoadUint32(&w.layout.NumOpenOrders))
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	numOrders := int(w.layout.NumOpenOrders)
 	for i := 0; i < numOrders; i++ {
 		if OrderIDToString(w.layout.OpenOrders[i].OrderID) == orderID {
 			w.layout.OpenOrders[i].Status = status
@@ -210,14 +227,17 @@ func (w *Writer) UpdateOpenOrder(orderID string, status uint8, filledSize float6
 
 // RemoveOpenOrder removes an open order by ID
 func (w *Writer) RemoveOpenOrder(orderID string) error {
-	numOrders := int(atomic.LoadUint32(&w.layout.NumOpenOrders))
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	numOrders := int(w.layout.NumOpenOrders)
 	for i := 0; i < numOrders; i++ {
 		if OrderIDToString(w.layout.OpenOrders[i].OrderID) == orderID {
 			// Shift remaining orders
 			for j := i; j < numOrders-1; j++ {
 				w.layout.OpenOrders[j] = w.layout.OpenOrders[j+1]
 			}
-			atomic.StoreUint32(&w.layout.NumOpenOrders, uint32(numOrders-1))
+			w.layout.NumOpenOrders = uint32(numOrders - 1)
 			return nil
 		}
 	}
@@ -226,12 +246,16 @@ func (w *Writer) RemoveOpenOrder(orderID string) error {
 
 // SetEquity updates the equity values
 func (w *Writer) SetEquity(total, available float64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.layout.TotalEquity = total
 	w.layout.AvailableMargin = available
 }
 
 // SetTradingEnabled enables or disables trading
 func (w *Writer) SetTradingEnabled(enabled bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if enabled {
 		w.layout.TradingEnabled = 1
 	} else {

@@ -21,7 +21,7 @@ const (
 	MaxSignals         = 16
 	MaxOpenOrders      = 128
 
-	AssetIDLen  = 66
+	AssetIDLen  = 78  // Polymarket token IDs are up to 77 digits + null terminator
 	SymbolLen   = 16
 	OrderIDLen  = 64
 )

@@ -21,7 +21,7 @@ MAX_POSITIONS = 64
 MAX_SIGNALS = 16
 MAX_OPEN_ORDERS = 128
 
-ASSET_ID_LEN = 66
+ASSET_ID_LEN = 78  # Polymarket token IDs are up to 77 digits + null terminator
 SYMBOL_LEN = 16
 ORDER_ID_LEN = 64
 

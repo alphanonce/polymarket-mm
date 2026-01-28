@@ -27,7 +27,7 @@
 #define MAX_SIGNALS 16
 #define MAX_OPEN_ORDERS 128
 
-#define ASSET_ID_LEN 66      // 0x + 64 hex chars
+#define ASSET_ID_LEN 78      // Polymarket token IDs are up to 77 digits + null terminator
 #define SYMBOL_LEN 16
 #define ORDER_ID_LEN 64
 
