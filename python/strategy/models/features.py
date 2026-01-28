@@ -5,7 +5,6 @@ Feature extraction utilities for strategy models.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -35,7 +34,7 @@ class FeatureConfig:
     max_position: float = 500.0
 
     # External price features
-    external_symbols: List[str] = field(default_factory=list)
+    external_symbols: list[str] = field(default_factory=list)
     include_external_spread: bool = True
 
     # Time features
@@ -47,13 +46,13 @@ class AdvancedFeatureExtractor:
     Advanced feature extractor with configurable features.
     """
 
-    def __init__(self, config: Optional[FeatureConfig] = None):
+    def __init__(self, config: FeatureConfig | None = None):
         self.config = config or FeatureConfig()
-        self._feature_names: List[str] = []
+        self._feature_names: list[str] = []
         self._build_feature_list()
 
     @property
-    def feature_names(self) -> List[str]:
+    def feature_names(self) -> list[str]:
         """Get list of feature names."""
         return self._feature_names.copy()
 
@@ -109,7 +108,7 @@ class AdvancedFeatureExtractor:
         Returns:
             Feature vector as numpy array
         """
-        features: Dict[str, float] = {}
+        features: dict[str, float] = {}
 
         # Price features
         if self.config.include_mid_price:
@@ -198,7 +197,7 @@ class AdvancedFeatureExtractor:
         return bid_depth, ask_depth
 
 
-def compute_vwap(levels: List[tuple[float, float]], depth: float = 100.0) -> float:
+def compute_vwap(levels: list[tuple[float, float]], depth: float = 100.0) -> float:
     """
     Compute volume-weighted average price.
 
@@ -223,8 +222,8 @@ def compute_vwap(levels: List[tuple[float, float]], depth: float = 100.0) -> flo
 
 
 def compute_microprice(
-    bids: List[tuple[float, float]],
-    asks: List[tuple[float, float]],
+    bids: list[tuple[float, float]],
+    asks: list[tuple[float, float]],
 ) -> float:
     """
     Compute the microprice (volume-weighted mid).
