@@ -40,7 +40,7 @@ paper:
   # use_shm: Write to SHM for Go service to persist (recommended)
   # use_direct_supabase: Python directly writes to Supabase (alternative)
   use_shm: true
-  use_direct_supabase: false
+  use_direct_supabase: true
 
   # Batching settings (for Go service)
   trade_batch_size: 50
@@ -53,3 +53,211 @@ risk:
   max_total_exposure: 5000.0
   max_order_size: 100.0
   min_order_size: 1.0
+
+# Strategy definitions
+# Each strategy has a unique ID and its own quote/size model parameters
+strategies:
+  # Z-score based strategies with different parameters
+  - id: "zs_t_df5_z3_rv"
+    name: "ZScore T-dist df=5 z=3 RV"
+    enabled: true
+    assets: ["btc", "eth", "sol", "xrp"]
+    timeframe: "15m"
+    quote_model:
+      type: "zscore"
+      distribution: "t"
+      t_df: 5
+      z: 3
+      vol_mode: "rv"  # realized volatility
+      base_spread: 0.02
+    size_model:
+      type: "proportional"
+      order_size_pct: 0.02
+      max_position_pct: 0.20
+
+  - id: "zs_t_df5_z3_iv"
+    name: "ZScore T-dist df=5 z=3 IV"
+    enabled: true
+    assets: ["btc", "eth", "sol", "xrp"]
+    timeframe: "15m"
+    quote_model:
+      type: "zscore"
+      distribution: "t"
+      t_df: 5
+      z: 3
+      vol_mode: "iv"  # implied volatility
+      base_spread: 0.02
+    size_model:
+      type: "proportional"
+      order_size_pct: 0.02
+      max_position_pct: 0.20
+
+  - id: "zs_t_df5_z1_rv"
+    name: "ZScore T-dist df=5 z=1 RV"
+    enabled: true
+    assets: ["btc", "eth", "sol", "xrp"]
+    timeframe: "15m"
+    quote_model:
+      type: "zscore"
+      distribution: "t"
+      t_df: 5
+      z: 1
+      vol_mode: "rv"
+      base_spread: 0.02
+    size_model:
+      type: "proportional"
+      order_size_pct: 0.02
+      max_position_pct: 0.20
+
+  - id: "zs_t_df5_z1_iv"
+    name: "ZScore T-dist df=5 z=1 IV"
+    enabled: true
+    assets: ["btc", "eth", "sol", "xrp"]
+    timeframe: "15m"
+    quote_model:
+      type: "zscore"
+      distribution: "t"
+      t_df: 5
+      z: 1
+      vol_mode: "iv"
+      base_spread: 0.02
+    size_model:
+      type: "proportional"
+      order_size_pct: 0.02
+      max_position_pct: 0.20
+
+  - id: "zs_t_df3_z3_rv"
+    name: "ZScore T-dist df=3 z=3 RV"
+    enabled: true
+    assets: ["btc", "eth", "sol", "xrp"]
+    timeframe: "15m"
+    quote_model:
+      type: "zscore"
+      distribution: "t"
+      t_df: 3
+      z: 3
+      vol_mode: "rv"
+      base_spread: 0.02
+    size_model:
+      type: "proportional"
+      order_size_pct: 0.02
+      max_position_pct: 0.20
+
+  - id: "zs_t_df3_z3_iv"
+    name: "ZScore T-dist df=3 z=3 IV"
+    enabled: true
+    assets: ["btc", "eth", "sol", "xrp"]
+    timeframe: "15m"
+    quote_model:
+      type: "zscore"
+      distribution: "t"
+      t_df: 3
+      z: 3
+      vol_mode: "iv"
+      base_spread: 0.02
+    size_model:
+      type: "proportional"
+      order_size_pct: 0.02
+      max_position_pct: 0.20
+
+  - id: "zs_t_df3_z1_rv"
+    name: "ZScore T-dist df=3 z=1 RV"
+    enabled: true
+    assets: ["btc", "eth", "sol", "xrp"]
+    timeframe: "15m"
+    quote_model:
+      type: "zscore"
+      distribution: "t"
+      t_df: 3
+      z: 1
+      vol_mode: "rv"
+      base_spread: 0.02
+    size_model:
+      type: "proportional"
+      order_size_pct: 0.02
+      max_position_pct: 0.20
+
+  - id: "zs_t_df3_z1_iv"
+    name: "ZScore T-dist df=3 z=1 IV"
+    enabled: true
+    assets: ["btc", "eth", "sol", "xrp"]
+    timeframe: "15m"
+    quote_model:
+      type: "zscore"
+      distribution: "t"
+      t_df: 3
+      z: 1
+      vol_mode: "iv"
+      base_spread: 0.02
+    size_model:
+      type: "proportional"
+      order_size_pct: 0.02
+      max_position_pct: 0.20
+
+  - id: "zs_t_df2.5_z3_rv"
+    name: "ZScore T-dist df=2.5 z=3 RV"
+    enabled: true
+    assets: ["btc", "eth", "sol", "xrp"]
+    timeframe: "15m"
+    quote_model:
+      type: "zscore"
+      distribution: "t"
+      t_df: 2.5
+      z: 3
+      vol_mode: "rv"
+      base_spread: 0.02
+    size_model:
+      type: "proportional"
+      order_size_pct: 0.02
+      max_position_pct: 0.20
+
+  - id: "zs_t_df2.5_z3_iv"
+    name: "ZScore T-dist df=2.5 z=3 IV"
+    enabled: true
+    assets: ["btc", "eth", "sol", "xrp"]
+    timeframe: "15m"
+    quote_model:
+      type: "zscore"
+      distribution: "t"
+      t_df: 2.5
+      z: 3
+      vol_mode: "iv"
+      base_spread: 0.02
+    size_model:
+      type: "proportional"
+      order_size_pct: 0.02
+      max_position_pct: 0.20
+
+  - id: "zs_t_df2.5_z1_rv"
+    name: "ZScore T-dist df=2.5 z=1 RV"
+    enabled: true
+    assets: ["btc", "eth", "sol", "xrp"]
+    timeframe: "15m"
+    quote_model:
+      type: "zscore"
+      distribution: "t"
+      t_df: 2.5
+      z: 1
+      vol_mode: "rv"
+      base_spread: 0.02
+    size_model:
+      type: "proportional"
+      order_size_pct: 0.02
+      max_position_pct: 0.20
+
+  - id: "zs_t_df2.5_z1_iv"
+    name: "ZScore T-dist df=2.5 z=1 IV"
+    enabled: true
+    assets: ["btc", "eth", "sol", "xrp"]
+    timeframe: "15m"
+    quote_model:
+      type: "zscore"
+      distribution: "t"
+      t_df: 2.5
+      z: 1
+      vol_mode: "iv"
+      base_spread: 0.02
+    size_model:
+      type: "proportional"
+      order_size_pct: 0.02
+      max_position_pct: 0.20
