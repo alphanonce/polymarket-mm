@@ -161,16 +161,15 @@ func (c *WSClient) SubscribeBook(assetID string) error {
 // This is important because Polymarket's WebSocket only sends initial snapshots for tokens
 // included in the same subscription message.
 func (c *WSClient) SubscribeBooksMany(assetIDs []string) error {
-	c.subMu.Lock()
-	defer c.subMu.Unlock()
-
-	// Filter out already subscribed assets
+	// Filter out already subscribed assets (RLock only)
+	c.subMu.RLock()
 	newAssets := make([]string, 0, len(assetIDs))
 	for _, assetID := range assetIDs {
 		if !c.subscribedBooks[assetID] {
 			newAssets = append(newAssets, assetID)
 		}
 	}
+	c.subMu.RUnlock()
 
 	if len(newAssets) == 0 {
 		return nil
@@ -186,12 +185,14 @@ func (c *WSClient) SubscribeBooksMany(assetIDs []string) error {
 		return err
 	}
 
-	// Mark all as subscribed and create orderbook states
+	// Update state: orderbooksMu first, then subMu (consistent with CleanupStaleOrderbooks)
 	c.orderbooksMu.Lock()
+	c.subMu.Lock()
 	for _, assetID := range newAssets {
 		c.subscribedBooks[assetID] = true
 		c.orderbooks[assetID] = NewOrderbookState(assetID)
 	}
+	c.subMu.Unlock()
 	c.orderbooksMu.Unlock()
 
 	c.logger.Info("Subscribed to books", zap.Int("count", len(newAssets)))
@@ -295,7 +296,10 @@ func (c *WSClient) handleMessage(data []byte) {
 		// Check event_type for price_change messages (legacy format)
 		if eventType, ok := raw["event_type"]; ok {
 			var et string
-			json.Unmarshal(eventType, &et)
+			if err := json.Unmarshal(eventType, &et); err != nil {
+				c.logger.Debug("Failed to parse event_type", zap.Error(err))
+				return
+			}
 			if et == "price_change" {
 				// Skip old format price_change events
 				return
@@ -352,7 +356,11 @@ func (c *WSClient) handleBookSnapshot(msg *BookSnapshotMessage) {
 		c.logger.Debug("handleBookSnapshot: empty asset ID")
 		return
 	}
-	c.logger.Info("Book snapshot received", zap.String("assetID", assetID[:20]+"..."), zap.Int("bids", len(msg.Bids)), zap.Int("asks", len(msg.Asks)))
+	displayID := assetID
+	if len(assetID) > 20 {
+		displayID = assetID[:20] + "..."
+	}
+	c.logger.Info("Book snapshot received", zap.String("assetID", displayID), zap.Int("bids", len(msg.Bids)), zap.Int("asks", len(msg.Asks)))
 
 	c.orderbooksMu.Lock()
 	ob, exists := c.orderbooks[assetID]
@@ -541,17 +549,23 @@ func (c *WSClient) resubscribe() {
 	c.subMu.RLock()
 	defer c.subMu.RUnlock()
 
-	for assetID := range c.subscribedBooks {
+	// Batch subscribe to books (important for receiving initial snapshots)
+	if len(c.subscribedBooks) > 0 {
+		bookAssets := make([]string, 0, len(c.subscribedBooks))
+		for assetID := range c.subscribedBooks {
+			bookAssets = append(bookAssets, assetID)
+		}
 		msg := SubscribeMessage{
 			Type:     MsgTypeSubscribe,
 			Channel:  ChannelBook,
-			AssetIDs: []string{assetID},
+			AssetIDs: bookAssets,
 		}
 		if err := c.send(msg); err != nil {
-			c.logger.Error("Failed to resubscribe to book", zap.String("assetID", assetID), zap.Error(err))
+			c.logger.Error("Failed to resubscribe to books", zap.Error(err))
 		}
 	}
 
+	// Trades can remain individual subscriptions
 	for assetID := range c.subscribedTrades {
 		msg := SubscribeMessage{
 			Type:     MsgTypeSubscribe,
