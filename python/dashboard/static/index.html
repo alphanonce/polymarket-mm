@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Paper Trading Dashboard</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --border-color: #30363d;
+            --green: #3fb950;
+            --red: #f85149;
+            --blue: #58a6ff;
+            --yellow: #d29922;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+
+        .container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: var(--border-color);
+        }
+
+        .btn-primary {
+            background: var(--green);
+            border-color: var(--green);
+            color: #fff;
+        }
+
+        .btn-primary:hover {
+            background: #2ea043;
+        }
+
+        /* Strategy Cards */
+        .strategy-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .strategy-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px;
+            cursor: pointer;
+            transition: border-color 0.2s;
+        }
+
+        .strategy-card:hover {
+            border-color: var(--blue);
+        }
+
+        .strategy-card.active {
+            border-color: var(--blue);
+            border-width: 2px;
+        }
+
+        .strategy-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .strategy-card-name {
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .strategy-card-status {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            background: var(--green);
+            color: #fff;
+        }
+
+        .strategy-card-status.stopped {
+            background: var(--red);
+        }
+
+        .strategy-card-pnl {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .strategy-card-pnl.positive {
+            color: var(--green);
+        }
+
+        .strategy-card-pnl.negative {
+            color: var(--red);
+        }
+
+        .strategy-card-meta {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Strategy selector dropdown */
+        .strategy-selector {
+            margin-bottom: 24px;
+        }
+
+        .strategy-selector select {
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-size: 14px;
+            min-width: 200px;
+        }
+
+        /* Main grid */
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+
+        @media (max-width: 1200px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Panels */
+        .panel {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .panel-title {
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+
+        /* Equity Chart */
+        .chart-container {
+            height: 250px;
+        }
+
+        /* Orderbook */
+        .orderbook {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .orderbook-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 8px;
+            font-family: monospace;
+            font-size: 13px;
+        }
+
+        .orderbook-row.ask {
+            background: rgba(248, 81, 73, 0.1);
+        }
+
+        .orderbook-row.bid {
+            background: rgba(63, 185, 80, 0.1);
+        }
+
+        .orderbook-row.our-quote {
+            border-left: 3px solid var(--blue);
+        }
+
+        .orderbook-spread {
+            text-align: center;
+            padding: 8px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            border-top: 1px dashed var(--border-color);
+            border-bottom: 1px dashed var(--border-color);
+        }
+
+        /* Fill History */
+        .fills-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        .fills-table th {
+            text-align: left;
+            padding: 8px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .fills-table td {
+            padding: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .fills-table .buy {
+            color: var(--green);
+        }
+
+        .fills-table .sell {
+            color: var(--red);
+        }
+
+        /* Metrics */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+        }
+
+        .metric-item {
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .metric-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Connection status */
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .connection-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--red);
+        }
+
+        .connection-dot.connected {
+            background: var(--green);
+        }
+
+        /* Inventory chart */
+        .inventory-chart-container {
+            height: 200px;
+        }
+
+        /* Full width panel */
+        .full-width {
+            grid-column: 1 / -1;
+        }
+
+        /* Quote info display */
+        .quote-info {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            font-size: 13px;
+        }
+
+        .quote-label {
+            color: var(--text-secondary);
+            margin-right: 4px;
+        }
+
+        .quote-value {
+            font-family: monospace;
+            font-weight: 500;
+        }
+
+        .quote-value.bid {
+            color: var(--green);
+        }
+
+        .quote-value.ask {
+            color: var(--red);
+        }
+
+        /* Strategy Filters */
+        .strategy-filters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            margin-bottom: 16px;
+        }
+
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .filter-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .filter-select {
+            padding: 4px 8px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-size: 12px;
+            cursor: pointer;
+            min-width: 70px;
+        }
+
+        .filter-select:hover {
+            border-color: var(--blue);
+        }
+
+        .filter-select:focus {
+            outline: none;
+            border-color: var(--blue);
+        }
+
+        .btn-small {
+            padding: 4px 10px;
+            font-size: 11px;
+        }
+
+        .filter-count {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-left: auto;
+        }
+
+        .strategy-card.filtered-out {
+            display: none;
+        }
+
+        /* Strategy card params display */
+        .strategy-card-params {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 4px;
+        }
+
+        .param-tag {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+        }
+
+        /* Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 24px;
+            min-width: 400px;
+            max-width: 90%;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 24px;
+        }
+
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 16px;
+        }
+
+        .form-row .form-group {
+            flex: 1;
+        }
+
+        /* Asset PnL in strategy cards */
+        .strategy-card-asset-pnl {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 8px;
+            font-size: 11px;
+        }
+
+        .asset-pnl {
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: var(--bg-tertiary);
+        }
+
+        .asset-pnl.positive { color: var(--green); }
+        .asset-pnl.negative { color: var(--red); }
+
+        /* Asset tabs */
+        .asset-tabs {
+            display: flex;
+            gap: 8px;
+        }
+
+        .asset-tab {
+            padding: 6px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+            cursor: pointer;
+            font-size: 13px;
+        }
+
+        .asset-tab.active {
+            background: var(--blue);
+            border-color: var(--blue);
+        }
+
+        .asset-tab:hover {
+            border-color: var(--blue);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>Paper Trading Dashboard</h1>
+            <div class="header-actions">
+                <div class="connection-status">
+                    <span class="connection-dot" id="connectionDot"></span>
+                    <span id="connectionText">Disconnected</span>
+                </div>
+                <button class="btn btn-primary" onclick="openAddStrategyModal()">+ Add Strategy</button>
+            </div>
+        </header>
+
+        <!-- Strategy Filters -->
+        <div class="strategy-filters" id="strategyFilters">
+            <div class="filter-group">
+                <label class="filter-label">DF:</label>
+                <select id="filterDf" class="filter-select" onchange="applyStrategyFilters()">
+                    <option value="all">All</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="filter-label">Vol Mode:</label>
+                <select id="filterVolMode" class="filter-select" onchange="applyStrategyFilters()">
+                    <option value="all">All</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="filter-label">Z:</label>
+                <select id="filterZ" class="filter-select" onchange="applyStrategyFilters()">
+                    <option value="all">All</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="filter-label">Asset:</label>
+                <select id="filterAsset" class="filter-select" onchange="applyStrategyFilters()">
+                    <option value="all">All</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="filter-label">Sort:</label>
+                <select id="sortPnl" class="filter-select" onchange="applyStrategyFilters()">
+                    <option value="default">Default</option>
+                    <option value="pnl-total-desc">Total PnL ↓</option>
+                    <option value="pnl-total-asc">Total PnL ↑</option>
+                    <option value="pnl-btc-desc">BTC PnL ↓</option>
+                    <option value="pnl-eth-desc">ETH PnL ↓</option>
+                    <option value="pnl-sol-desc">SOL PnL ↓</option>
+                    <option value="pnl-xrp-desc">XRP PnL ↓</option>
+                </select>
+            </div>
+            <button class="btn btn-small" onclick="clearStrategyFilters()">Clear</button>
+            <span class="filter-count" id="filterCount"></span>
+        </div>
+
+        <!-- Strategy Cards -->
+        <div class="strategy-cards" id="strategyCards">
+            <!-- Cards will be populated by JavaScript -->
+        </div>
+
+        <!-- Strategy Selector -->
+        <div class="strategy-selector">
+            <select id="strategySelect" onchange="selectStrategy(this.value)">
+                <option value="">Select a strategy...</option>
+            </select>
+        </div>
+
+        <!-- Asset Tabs -->
+        <div class="asset-tabs" id="assetTabs" style="margin-bottom: 16px;">
+            <button class="asset-tab active" data-asset="all" onclick="selectAssetTab('all')">All</button>
+            <button class="asset-tab" data-asset="btc" onclick="selectAssetTab('btc')">BTC</button>
+            <button class="asset-tab" data-asset="eth" onclick="selectAssetTab('eth')">ETH</button>
+            <button class="asset-tab" data-asset="sol" onclick="selectAssetTab('sol')">SOL</button>
+            <button class="asset-tab" data-asset="xrp" onclick="selectAssetTab('xrp')">XRP</button>
+        </div>
+
+        <!-- Main Grid -->
+        <div class="main-grid" id="mainContent" style="display: none;">
+            <!-- Equity Curve -->
+            <div class="panel">
+                <div class="panel-header">
+                    <span class="panel-title">Equity Curve</span>
+                    <span id="currentEquity">$0.00</span>
+                </div>
+                <div class="chart-container" id="equityChart"></div>
+            </div>
+
+            <!-- Orderbook -->
+            <div class="panel">
+                <div class="panel-header">
+                    <span class="panel-title">Live Orderbook</span>
+                    <span id="marketSlug">-</span>
+                </div>
+                <div class="orderbook" id="orderbook">
+                    <!-- Orderbook rows -->
+                </div>
+            </div>
+
+            <!-- Inventory -->
+            <div class="panel">
+                <div class="panel-header">
+                    <span class="panel-title">Inventory History</span>
+                    <span id="currentInventory">0</span>
+                </div>
+                <div class="inventory-chart-container" id="inventoryChart"></div>
+            </div>
+
+            <!-- Quote History -->
+            <div class="panel full-width">
+                <div class="panel-header">
+                    <span class="panel-title">Quote History</span>
+                    <span class="quote-info">
+                        <span><span class="quote-label">Bid:</span><span id="ourBid" class="quote-value">-</span></span>
+                        <span><span class="quote-label">Ask:</span><span id="ourAsk" class="quote-value">-</span></span>
+                        <span><span class="quote-label">TTX:</span><span id="timeToExpiry" class="quote-value">-</span></span>
+                    </span>
+                </div>
+                <div class="chart-container" id="quoteChart"></div>
+            </div>
+
+            <!-- Metrics -->
+            <div class="panel">
+                <div class="panel-header">
+                    <span class="panel-title">Performance Metrics</span>
+                </div>
+                <div class="metrics-grid">
+                    <div class="metric-item">
+                        <div class="metric-value" id="metricPnl">$0.00</div>
+                        <div class="metric-label">Total PnL</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-value" id="metricWinRate">0%</div>
+                        <div class="metric-label">Win Rate</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-value" id="metricSharpe">0.00</div>
+                        <div class="metric-label">Sharpe Ratio</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-value" id="metricDrawdown">0%</div>
+                        <div class="metric-label">Max Drawdown</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-value" id="metricTrades">0</div>
+                        <div class="metric-label">Total Trades</div>
+                    </div>
+                    <div class="metric-item">
+                        <div class="metric-value" id="metricPositions">0</div>
+                        <div class="metric-label">Open Positions</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Fill History -->
+            <div class="panel full-width">
+                <div class="panel-header">
+                    <span class="panel-title">Fill History</span>
+                </div>
+                <table class="fills-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Market</th>
+                            <th>Side</th>
+                            <th>Price</th>
+                            <th>Size</th>
+                            <th>PnL</th>
+                        </tr>
+                    </thead>
+                    <tbody id="fillsTableBody">
+                        <!-- Fills will be populated by JavaScript -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Strategy Modal -->
+    <div class="modal-overlay" id="addStrategyModal">
+        <div class="modal">
+            <div class="modal-header">
+                <span class="modal-title">Add Strategy</span>
+                <button class="modal-close" onclick="closeAddStrategyModal()">&times;</button>
+            </div>
+            <form id="addStrategyForm" onsubmit="submitAddStrategy(event)">
+                <div class="form-group">
+                    <label>Strategy Name</label>
+                    <input type="text" name="name" required placeholder="e.g., BTC Conservative">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Assets</label>
+                        <select name="assets" multiple>
+                            <option value="btc" selected>BTC</option>
+                            <option value="eth">ETH</option>
+                            <option value="sol">SOL</option>
+                            <option value="xrp">XRP</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Timeframe</label>
+                        <select name="timeframe">
+                            <option value="15m" selected>15 Minutes</option>
+                            <option value="1h">1 Hour</option>
+                            <option value="4h">4 Hours</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Starting Capital ($)</label>
+                    <input type="number" name="starting_capital" value="10000" min="100" step="100">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Base Spread</label>
+                        <input type="number" name="base_spread" value="0.04" min="0.01" max="0.5" step="0.01">
+                    </div>
+                    <div class="form-group">
+                        <label>Max Position</label>
+                        <input type="number" name="max_position" value="100" min="1">
+                    </div>
+                </div>
+                <div style="text-align: right; margin-top: 16px;">
+                    <button type="button" class="btn" onclick="closeAddStrategyModal()">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create Strategy</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/charts.js"></script>
+    <script src="/static/app.js"></script>
+</body>
+</html>
