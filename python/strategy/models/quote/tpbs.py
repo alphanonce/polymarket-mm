@@ -6,14 +6,14 @@ take-profit/stop-loss logic for Polymarket market-making.
 """
 
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal
 
 import numpy as np
 
 from strategy.models.base import NormalizationConfig, QuoteModel, QuoteResult, StrategyState
 from strategy.utils.black_scholes import bs_binary_call
 from strategy.utils.polymarket import get_tick_size
-from strategy.utils.volatility import PriceHistory, SECONDS_PER_YEAR
+from strategy.utils.volatility import SECONDS_PER_YEAR, PriceHistory
 
 
 @dataclass
@@ -49,7 +49,7 @@ class TpBSQuoteConfig:
     # Market parameters
     strike: float = 0.5  # Option strike price
     time_to_expiry_years: float = 0.1  # T in years
-    reference_price_symbol: Optional[str] = None  # External price symbol
+    reference_price_symbol: str | None = None  # External price symbol
 
     # Price history parameters
     price_history_max_size: int = 1000
@@ -73,8 +73,8 @@ class TpBSQuoteModel(QuoteModel):
 
     def __init__(
         self,
-        config: Optional[TpBSQuoteConfig] = None,
-        normalization: Optional[NormalizationConfig] = None,
+        config: TpBSQuoteConfig | None = None,
+        normalization: NormalizationConfig | None = None,
     ):
         super().__init__(normalization)
         self.config = config or TpBSQuoteConfig()

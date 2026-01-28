@@ -6,7 +6,6 @@ Abstract interfaces for quote and size models with built-in normalization.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -14,7 +13,6 @@ from strategy.shm.types import ExternalPriceState, MarketState, PositionState
 from strategy.utils.polymarket import (
     DEFAULT_MIN_SIZE,
     DEFAULT_SIZE_TICK,
-    TickInfo,
     clamp_price,
     clamp_quantity,
     get_tick_info,
@@ -51,17 +49,17 @@ class StrategyState:
 
     # Market data
     market: MarketState
-    external_prices: Dict[str, ExternalPriceState] = field(default_factory=dict)
+    external_prices: dict[str, ExternalPriceState] = field(default_factory=dict)
 
     # Position info
-    position: Optional[PositionState] = None
+    position: PositionState | None = None
 
     # Account info
     total_equity: float = 0.0
     available_margin: float = 0.0
 
     # Computed features
-    features: Optional[np.ndarray] = None
+    features: np.ndarray | None = None
 
     @property
     def current_position(self) -> float:
@@ -97,7 +95,7 @@ class StrategyState:
         """Get market token/asset ID."""
         return self.market.asset_id
 
-    def get_external_price(self, symbol: str) -> Optional[float]:
+    def get_external_price(self, symbol: str) -> float | None:
         """Get external price for a symbol."""
         if symbol in self.external_prices:
             return self.external_prices[symbol].price
@@ -121,13 +119,13 @@ class NormalizationConfig:
     min_size: float = DEFAULT_MIN_SIZE
 
     # Override tick info (if None, uses market defaults)
-    price_tick: Optional[float] = None
+    price_tick: float | None = None
 
 
 class QuoteModel(ABC):
     """Abstract base class for quote models with normalization."""
 
-    def __init__(self, normalization: Optional[NormalizationConfig] = None):
+    def __init__(self, normalization: NormalizationConfig | None = None):
         self._norm_config = normalization or NormalizationConfig()
 
     @property
@@ -186,7 +184,7 @@ class QuoteModel(ABC):
         self,
         bid: float,
         ask: float,
-        state: Optional[StrategyState] = None,
+        state: StrategyState | None = None,
     ) -> tuple[float, float]:
         """
         Normalize bid/ask prices with rounding and clamping.
@@ -235,7 +233,7 @@ class QuoteModel(ABC):
         self,
         state: StrategyState,
         result: QuoteResult,
-        fill_info: Optional[dict] = None,
+        fill_info: dict[str, object] | None = None,
     ) -> None:
         """
         Update model state after a decision.
@@ -277,7 +275,7 @@ class QuoteModel(ABC):
 class SizeModel(ABC):
     """Abstract base class for size models with normalization."""
 
-    def __init__(self, normalization: Optional[NormalizationConfig] = None):
+    def __init__(self, normalization: NormalizationConfig | None = None):
         self._norm_config = normalization or NormalizationConfig()
 
     @property
@@ -333,7 +331,7 @@ class SizeModel(ABC):
         self,
         bid_size: float,
         ask_size: float,
-        state: Optional[StrategyState] = None,
+        state: StrategyState | None = None,
     ) -> tuple[float, float]:
         """
         Normalize bid/ask sizes with rounding and min size enforcement.
@@ -373,7 +371,7 @@ class SizeModel(ABC):
         self,
         state: StrategyState,
         result: SizeResult,
-        fill_info: Optional[dict] = None,
+        fill_info: dict[str, object] | None = None,
     ) -> None:
         """
         Update model state after a decision.
@@ -415,7 +413,7 @@ class SizeModel(ABC):
 class FeatureExtractor:
     """Extracts features from market state for model input."""
 
-    def __init__(self, feature_names: List[str]):
+    def __init__(self, feature_names: list[str]):
         self.feature_names = feature_names
         self.n_features = len(feature_names)
 

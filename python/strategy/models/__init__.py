@@ -17,8 +17,11 @@ from strategy.models.quote import (
     InventoryAdjustedQuoteModel,
     SpreadQuoteConfig,
     SpreadQuoteModel,
+    TpBSQuoteConfig,
+    TpBSQuoteModel,
+    ZSpreadQuoteConfig,
+    ZSpreadQuoteModel,
 )
-from strategy.models.quote_tpbs import TpBSQuoteConfig, TpBSQuoteModel
 from strategy.models.size import (
     ConfidenceBasedSizeConfig,
     ConfidenceBasedSizeModel,
@@ -26,6 +29,8 @@ from strategy.models.size import (
     FixedSizeModel,
     InventoryBasedSizeConfig,
     InventoryBasedSizeModel,
+    ProportionalSizeConfig,
+    ProportionalSizeModel,
 )
 
 __all__ = [
@@ -43,6 +48,8 @@ __all__ = [
     "InventoryAdjustedQuoteConfig",
     "TpBSQuoteModel",
     "TpBSQuoteConfig",
+    "ZSpreadQuoteModel",
+    "ZSpreadQuoteConfig",
     # Size models
     "FixedSizeModel",
     "FixedSizeConfig",
@@ -50,4 +57,6 @@ __all__ = [
     "InventoryBasedSizeConfig",
     "ConfidenceBasedSizeModel",
     "ConfidenceBasedSizeConfig",
+    "ProportionalSizeModel",
+    "ProportionalSizeConfig",
 ]

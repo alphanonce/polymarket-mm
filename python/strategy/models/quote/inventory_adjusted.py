@@ -1,11 +1,10 @@
 """
-Quote Models
+Inventory Adjusted Quote Model
 
-Implementations of quote models for market making.
+Quote model that adjusts prices based on inventory and external reference prices.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
@@ -18,63 +17,6 @@ from strategy.models.base import (
 
 
 @dataclass
-class SpreadQuoteConfig:
-    """Configuration for spread-based quote model."""
-
-    min_spread: float = 0.01  # Minimum spread (1%)
-    max_spread: float = 0.10  # Maximum spread (10%)
-    base_spread: float = 0.02  # Base spread (2%)
-    volatility_multiplier: float = 1.0  # Spread adjustment for volatility
-    min_edge: float = 0.005  # Minimum edge over fair value
-
-
-class SpreadQuoteModel(QuoteModel):
-    """
-    Simple spread-based quote model.
-
-    Quotes a fixed spread around the mid price.
-    Normalization (rounding, clamping) is handled by the base class.
-    """
-
-    def __init__(
-        self,
-        config: Optional[SpreadQuoteConfig] = None,
-        normalization: Optional[NormalizationConfig] = None,
-    ):
-        super().__init__(normalization)
-        self.config = config or SpreadQuoteConfig()
-
-    def compute_raw(self, state: StrategyState) -> QuoteResult:
-        """Compute raw bid/ask prices before normalization."""
-        mid = state.mid_price
-
-        if mid <= 0:
-            return QuoteResult(
-                bid_price=0,
-                ask_price=0,
-                should_quote=False,
-                reason="Invalid mid price",
-            )
-
-        half_spread = self.config.base_spread / 2
-
-        bid_price = mid * (1 - half_spread)
-        ask_price = mid * (1 + half_spread)
-
-        # Ensure minimum spread (raw, before normalization)
-        if ask_price - bid_price < self.config.min_spread:
-            adjustment = (self.config.min_spread - (ask_price - bid_price)) / 2
-            bid_price -= adjustment
-            ask_price += adjustment
-
-        return QuoteResult(
-            bid_price=bid_price,
-            ask_price=ask_price,
-            confidence=1.0,
-        )
-
-
-@dataclass
 class InventoryAdjustedQuoteConfig:
     """Configuration for inventory-adjusted quote model."""
 
@@ -83,7 +25,7 @@ class InventoryAdjustedQuoteConfig:
     max_spread: float = 0.15  # Maximum spread
     inventory_skew: float = 0.5  # How much to skew based on inventory
     max_inventory: float = 1000.0  # Max inventory for full skew
-    reference_price_symbol: Optional[str] = None  # External price to use as reference
+    reference_price_symbol: str | None = None  # External price to use as reference
     reference_price_weight: float = 0.0  # Weight of external price (0-1)
 
 
@@ -98,8 +40,8 @@ class InventoryAdjustedQuoteModel(QuoteModel):
 
     def __init__(
         self,
-        config: Optional[InventoryAdjustedQuoteConfig] = None,
-        normalization: Optional[NormalizationConfig] = None,
+        config: InventoryAdjustedQuoteConfig | None = None,
+        normalization: NormalizationConfig | None = None,
     ):
         super().__init__(normalization)
         self.config = config or InventoryAdjustedQuoteConfig()
@@ -177,10 +119,10 @@ class InventoryAdjustedQuoteModel(QuoteModel):
             return 0.0
 
         # Normalize position to [-1, 1]
-        normalized = np.clip(position / self.config.max_inventory, -1, 1)
+        normalized: float = float(np.clip(position / self.config.max_inventory, -1, 1))
 
         # Skew is opposite to position direction
-        skew = -normalized * self.config.inventory_skew * state.mid_price
+        skew: float = -normalized * self.config.inventory_skew * state.mid_price
 
         return skew
 
@@ -191,7 +133,9 @@ class InventoryAdjustedQuoteModel(QuoteModel):
         inv_ratio = min(1.0, position / self.config.max_inventory)
 
         # Lower confidence when spread is wide
-        spread_ratio = state.spread / self.config.base_spread if self.config.base_spread > 0 else 1.0
+        spread_ratio = (
+            state.spread / self.config.base_spread if self.config.base_spread > 0 else 1.0
+        )
 
         confidence = 1.0
         confidence *= 1.0 - 0.3 * inv_ratio  # Up to 30% reduction from inventory
