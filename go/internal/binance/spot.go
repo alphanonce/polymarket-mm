@@ -39,10 +39,12 @@ type SpotClient struct {
 	onError       func(err error)
 
 	// Control
-	ctx            context.Context
-	cancel         context.CancelFunc
-	wg             sync.WaitGroup
-	reconnectDelay time.Duration
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	wg                   sync.WaitGroup
+	reconnectDelay       time.Duration
+	maxReconnectDelay    time.Duration
+	maxReconnectAttempts int
 }
 
 // TickerPrice represents current ticker price
@@ -81,9 +83,11 @@ type MiniTickerMessage struct {
 
 // SpotClientConfig configures the spot WebSocket client
 type SpotClientConfig struct {
-	Endpoint       string
-	Logger         *zap.Logger
-	ReconnectDelay time.Duration
+	Endpoint             string
+	Logger               *zap.Logger
+	ReconnectDelay       time.Duration
+	MaxReconnectDelay    time.Duration
+	MaxReconnectAttempts int
 }
 
 // NewSpotClient creates a new spot WebSocket client
@@ -97,17 +101,25 @@ func NewSpotClient(cfg SpotClientConfig) *SpotClient {
 	if cfg.ReconnectDelay == 0 {
 		cfg.ReconnectDelay = 5 * time.Second
 	}
+	if cfg.MaxReconnectDelay == 0 {
+		cfg.MaxReconnectDelay = 60 * time.Second
+	}
+	if cfg.MaxReconnectAttempts == 0 {
+		cfg.MaxReconnectAttempts = 10
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &SpotClient{
-		endpoint:          cfg.Endpoint,
-		logger:            cfg.Logger,
-		subscribedTickers: make(map[string]bool),
-		prices:            make(map[string]*TickerPrice),
-		ctx:               ctx,
-		cancel:            cancel,
-		reconnectDelay:    cfg.ReconnectDelay,
+		endpoint:             cfg.Endpoint,
+		logger:               cfg.Logger,
+		subscribedTickers:    make(map[string]bool),
+		prices:               make(map[string]*TickerPrice),
+		ctx:                  ctx,
+		cancel:               cancel,
+		reconnectDelay:       cfg.ReconnectDelay,
+		maxReconnectDelay:    cfg.MaxReconnectDelay,
+		maxReconnectAttempts: cfg.MaxReconnectAttempts,
 	}
 }
 
@@ -286,27 +298,54 @@ func (c *SpotClient) handleMiniTicker(msg *MiniTickerMessage) {
 }
 
 func (c *SpotClient) reconnect() {
-	for {
+	// Close existing connection if any
+	if c.conn != nil {
+		_ = c.conn.Close()
+		c.conn = nil
+	}
+
+	c.subMu.RLock()
+	symbols := make([]string, 0, len(c.subscribedTickers))
+	for sym := range c.subscribedTickers {
+		symbols = append(symbols, sym)
+	}
+	c.subMu.RUnlock()
+
+	for attempt := 0; attempt < c.maxReconnectAttempts; attempt++ {
 		select {
 		case <-c.ctx.Done():
 			return
-		case <-time.After(c.reconnectDelay):
+		default:
 		}
 
-		c.logger.Info("Attempting to reconnect...")
-
-		c.subMu.RLock()
-		symbols := make([]string, 0, len(c.subscribedTickers))
-		for sym := range c.subscribedTickers {
-			symbols = append(symbols, sym)
+		// Exponential backoff: 5s → 10s → 20s → 40s → max 60s
+		delay := c.reconnectDelay * time.Duration(1<<uint(attempt))
+		if delay > c.maxReconnectDelay {
+			delay = c.maxReconnectDelay
 		}
-		c.subMu.RUnlock()
+
+		c.logger.Info("Attempting to reconnect...",
+			zap.Int("attempt", attempt+1),
+			zap.Int("maxAttempts", c.maxReconnectAttempts),
+			zap.Duration("delay", delay))
+
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-time.After(delay):
+		}
 
 		if err := c.Connect(symbols); err != nil {
-			c.logger.Error("Reconnect failed", zap.Error(err))
+			c.logger.Error("Reconnect failed", zap.Error(err), zap.Int("attempt", attempt+1))
 			continue
 		}
 
 		return
+	}
+
+	c.logger.Error("Max reconnect attempts reached, giving up",
+		zap.Int("maxAttempts", c.maxReconnectAttempts))
+	if c.onError != nil {
+		c.onError(fmt.Errorf("max reconnect attempts (%d) reached", c.maxReconnectAttempts))
 	}
 }
