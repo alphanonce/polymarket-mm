@@ -246,12 +246,16 @@ func (w *Writer) RemoveOpenOrder(orderID string) error {
 
 // SetEquity updates the equity values
 func (w *Writer) SetEquity(total, available float64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.layout.TotalEquity = total
 	w.layout.AvailableMargin = available
 }
 
 // SetTradingEnabled enables or disables trading
 func (w *Writer) SetTradingEnabled(enabled bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if enabled {
 		w.layout.TradingEnabled = 1
 	} else {

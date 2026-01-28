@@ -49,6 +49,7 @@ ORDER_STATUS_REJECTED = 4
 class PriceLevel(ctypes.Structure):
     """Single price level in orderbook."""
 
+    _pack_ = 1
     _fields_ = [
         ("price", ctypes.c_double),
         ("size", ctypes.c_double),
@@ -58,6 +59,7 @@ class PriceLevel(ctypes.Structure):
 class MarketBook(ctypes.Structure):
     """Market orderbook state for a single market."""
 
+    _pack_ = 1
     _fields_ = [
         ("asset_id", ctypes.c_char * ASSET_ID_LEN),
         ("timestamp_ns", ctypes.c_uint64),
@@ -89,6 +91,7 @@ class MarketBook(ctypes.Structure):
 class ExternalPrice(ctypes.Structure):
     """External price feed."""
 
+    _pack_ = 1
     _fields_ = [
         ("symbol", ctypes.c_char * SYMBOL_LEN),
         ("price", ctypes.c_double),
@@ -105,6 +108,7 @@ class ExternalPrice(ctypes.Structure):
 class Position(ctypes.Structure):
     """Position in a market."""
 
+    _pack_ = 1
     _fields_ = [
         ("asset_id", ctypes.c_char * ASSET_ID_LEN),
         ("position", ctypes.c_double),
@@ -121,6 +125,7 @@ class Position(ctypes.Structure):
 class OpenOrder(ctypes.Structure):
     """Open order tracking."""
 
+    _pack_ = 1
     _fields_ = [
         ("order_id", ctypes.c_char * ORDER_ID_LEN),
         ("asset_id", ctypes.c_char * ASSET_ID_LEN),
@@ -146,6 +151,7 @@ class OpenOrder(ctypes.Structure):
 class OrderSignal(ctypes.Structure):
     """Order signal from strategy to executor."""
 
+    _pack_ = 1
     _fields_ = [
         ("signal_id", ctypes.c_uint64),
         ("asset_id", ctypes.c_char * ASSET_ID_LEN),
@@ -170,6 +176,7 @@ class OrderSignal(ctypes.Structure):
 class SharedMemoryLayout(ctypes.Structure):
     """Main shared memory layout."""
 
+    _pack_ = 1
     _fields_ = [
         # Header
         ("magic", ctypes.c_uint32),
