@@ -7,11 +7,11 @@ real-time dashboard visualization.
 """
 
 from paper.executor import PaperExecutor
-from paper.position_tracker import PositionTracker
-from paper.supabase_store import SupabaseStore
 from paper.metrics import MetricsCalculator
+from paper.position_tracker import PositionTracker
+from paper.runner import PaperConfig, PaperTradingRunner
 from paper.shm_paper import PaperSHMWriter
-from paper.runner import PaperTradingRunner, PaperConfig
+from paper.supabase_store import SupabaseStore
 
 __all__ = [
     "PaperExecutor",

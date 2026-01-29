@@ -27,7 +27,7 @@ class TestAsyncSupabaseStore:
             # Mock the parent's insert_trade to simulate slow HTTP
             call_times: list[float] = []
 
-            def slow_insert(self, trade):
+            def slow_insert(self: object, trade: dict[str, object]) -> None:
                 time.sleep(0.1)  # Simulate 100ms HTTP request
                 call_times.append(time.time())
 
@@ -103,7 +103,7 @@ class TestAsyncSupabaseStore:
             mock_client.return_value = MagicMock()
             store = AsyncSupabaseStore(config)
 
-            def count_insert(self, trade):
+            def count_insert(self: object, trade: dict[str, object]) -> None:
                 nonlocal processed_count
                 time.sleep(0.05)
                 processed_count += 1

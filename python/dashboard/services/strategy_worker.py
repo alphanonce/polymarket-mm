@@ -144,7 +144,7 @@ class StrategyWorker:
         # Initialize paper executor
         self._paper_executor = PaperExecutor(
             position_tracker=self._position_tracker,
-            supabase_store=self._supabase_store,  # type: ignore[arg-type]
+            supabase_store=self._supabase_store,
         )
 
         # Initialize quote and size models
@@ -291,27 +291,17 @@ class StrategyWorker:
                     )
                 )
 
-        # Build quotes list
+        # Build quotes list (only for UP tokens to avoid UP/DOWN confusion)
         quotes: list[MarketQuote] = []
-        for asset_id, market in markets.items():
-            if not market.bids or not market.asks:
+        for slug, market_info in self._active_markets.items():
+            # Only display UP token markets (quotes are computed for UP tokens)
+            asset_id = market_info.token_id_up
+            market = markets.get(asset_id)
+            if not market or not market.bids or not market.asks:
                 continue
 
-            # Parse slug info
-            slug = asset_id[:32]  # Simplified
-            asset = ""
-            timeframe = ""
-
-            # Get active market info if available
-            for mkt in self._active_markets.values():
-                if mkt.token_id_up == asset_id or mkt.token_id_down == asset_id:
-                    slug = mkt.slug
-                    asset = mkt.asset
-                    timeframe = mkt.timeframe
-                    break
-
-            position = self._position_tracker.positions.get(asset_id)
-            inventory = position.size if position else 0.0
+            # Get net position across UP and DOWN tokens
+            net_position, _, _ = self._get_net_position(market_info)
 
             best_bid = market.bids[0][0]
             best_ask = market.asks[0][0]
@@ -326,18 +316,11 @@ class StrategyWorker:
                 our_bid = quote_result.bid_price
                 our_ask = quote_result.ask_price
 
-            # Get time to expiry
-            time_to_expiry_s = 0.0
-            for mkt in self._active_markets.values():
-                if mkt.slug == slug:
-                    time_to_expiry_s = mkt.time_to_expiry_s
-                    break
-
             quotes.append(
                 MarketQuote(
                     slug=slug,
-                    asset=asset,
-                    timeframe=timeframe,
+                    asset=market_info.asset,
+                    timeframe=market_info.timeframe,
                     our_bid=our_bid,
                     our_ask=our_ask,
                     best_bid=best_bid,
@@ -346,8 +329,8 @@ class StrategyWorker:
                     spread=spread,
                     bids=[LevelInfo(price=p, size=s) for p, s in market.bids[:5]],
                     asks=[LevelInfo(price=p, size=s) for p, s in market.asks[:5]],
-                    inventory=inventory,
-                    time_to_expiry_s=time_to_expiry_s,
+                    inventory=net_position,
+                    time_to_expiry_s=market_info.time_to_expiry_s,
                 )
             )
 
@@ -499,13 +482,14 @@ class StrategyWorker:
 
             # Record quote history if we should quote
             if quote_result.should_quote:
-                now_ms = int(time.time() * 1000)
+                # Use market timestamp for consistency with quote model T calculation
+                market_timestamp_ms = market.timestamp_ns // 1_000_000
                 best_bid = market.bids[0][0]
                 best_ask = market.asks[0][0]
                 mid_price = (best_bid + best_ask) / 2
                 self._state.quote_history.append(
                     (
-                        now_ms,
+                        market_timestamp_ms,
                         slug,
                         quote_result.bid_price,
                         quote_result.ask_price,

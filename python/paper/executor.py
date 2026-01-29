@@ -6,7 +6,7 @@ Intercepts order signals and simulates execution against live orderbook.
 
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 import structlog
 
@@ -15,9 +15,18 @@ from strategy.shm.types import SIDE_BUY, MarketState
 
 if TYPE_CHECKING:
     from paper.position_tracker import PositionTracker
-    from paper.supabase_store import SupabaseStore
+
+
+class TradeStore(Protocol):
+    """Protocol for trade storage."""
+
+    def insert_trade(self, trade: dict[str, Any]) -> None: ...
+    def upsert_position(self, position: dict[str, Any]) -> None: ...
 
 logger = structlog.get_logger()
+
+# Maximum age of a signal relative to market data timestamp (5 seconds)
+MAX_SIGNAL_AGE_NS = 5_000_000_000
 
 
 @dataclass
@@ -76,7 +85,7 @@ class PaperExecutor:
     def __init__(
         self,
         position_tracker: "PositionTracker",
-        supabase_store: "SupabaseStore",
+        supabase_store: TradeStore,
         fill_delay_ms: float = 0.0,
     ):
         self.position_tracker = position_tracker
@@ -132,6 +141,16 @@ class PaperExecutor:
             self.logger.debug("No orderbook data", asset_id=signal.asset_id)
             return None
 
+        # Validate signal is not stale relative to market data
+        signal_age_ns = market.timestamp_ns - signal.timestamp_ns
+        if signal_age_ns > MAX_SIGNAL_AGE_NS:
+            self.logger.warning(
+                "Signal is stale",
+                signal_id=signal.signal_id,
+                signal_age_ms=signal_age_ns // 1_000_000,
+            )
+            return None
+
         fill = None
         fill_size = 0.0
 
@@ -141,14 +160,18 @@ class PaperExecutor:
             if signal.price >= best_ask_price and best_ask_size > 0:
                 fill_price = best_ask_price
                 fill_size = min(signal.size, best_ask_size)
-                fill = self._execute_fill(signal, fill_price, fill_size)
+                fill = self._execute_fill(
+                    signal, fill_price, fill_size, market.timestamp_ns
+                )
         else:
             # Sell at best bid if price crosses
             best_bid_price, best_bid_size = market.bids[0]
             if signal.price <= best_bid_price and best_bid_size > 0:
                 fill_price = best_bid_price
                 fill_size = min(signal.size, best_bid_size)
-                fill = self._execute_fill(signal, fill_price, fill_size)
+                fill = self._execute_fill(
+                    signal, fill_price, fill_size, market.timestamp_ns
+                )
 
         # Calculate remaining size after fill
         remaining = signal.size - fill_size
@@ -192,12 +215,24 @@ class PaperExecutor:
         """
         fills = []
         fully_filled_ids = []
+        stale_order_ids = []
 
         for signal_id, order in list(self.open_orders.items()):
             if order.signal.asset_id != market.asset_id:
                 continue
 
             if not market.bids or not market.asks:
+                continue
+
+            # Check for stale orders (give open orders more leeway than new signals)
+            order_age_ns = market.timestamp_ns - order.signal.timestamp_ns
+            if order_age_ns > MAX_SIGNAL_AGE_NS * 2:
+                self.logger.info(
+                    "Cancelling stale order",
+                    signal_id=signal_id,
+                    order_age_ms=order_age_ns // 1_000_000,
+                )
+                stale_order_ids.append(signal_id)
                 continue
 
             signal = order.signal
@@ -209,13 +244,17 @@ class PaperExecutor:
                 if signal.price >= best_ask_price and best_ask_size > 0:
                     fill_price = best_ask_price
                     fill_size = min(order.remaining_size, best_ask_size)
-                    fill = self._execute_fill(signal, fill_price, fill_size)
+                    fill = self._execute_fill(
+                        signal, fill_price, fill_size, market.timestamp_ns
+                    )
             else:
                 best_bid_price, best_bid_size = market.bids[0]
                 if signal.price <= best_bid_price and best_bid_size > 0:
                     fill_price = best_bid_price
                     fill_size = min(order.remaining_size, best_bid_size)
-                    fill = self._execute_fill(signal, fill_price, fill_size)
+                    fill = self._execute_fill(
+                        signal, fill_price, fill_size, market.timestamp_ns
+                    )
 
             if fill:
                 fills.append(fill)
@@ -235,8 +274,8 @@ class PaperExecutor:
                         remaining_size=order.remaining_size,
                     )
 
-        # Remove only fully filled orders
-        for signal_id in fully_filled_ids:
+        # Remove fully filled and stale orders
+        for signal_id in fully_filled_ids + stale_order_ids:
             del self.open_orders[signal_id]
 
         return fills
@@ -246,10 +285,20 @@ class PaperExecutor:
         signal: OrderSignal,
         fill_price: float,
         fill_size: float,
+        reference_timestamp_ns: int | None = None,
     ) -> Fill:
         """
         Execute a fill, update position tracker, and store to Supabase.
+
+        Args:
+            signal: The order signal being filled
+            fill_price: Price at which the fill occurs
+            fill_size: Size of the fill
+            reference_timestamp_ns: Optional market timestamp for consistency
         """
+        # Use reference timestamp if provided, otherwise fall back to current time
+        fill_timestamp_ns = reference_timestamp_ns or time.time_ns()
+
         # Record trade in position tracker
         trade = self.position_tracker.record_trade(
             asset_id=signal.asset_id,
@@ -258,6 +307,7 @@ class PaperExecutor:
             price=fill_price,
             size=fill_size,
             token_side=signal.token_side,
+            timestamp_ns=fill_timestamp_ns,
         )
 
         fill = Fill(
@@ -267,7 +317,7 @@ class PaperExecutor:
             side=signal.side,
             price=fill_price,
             size=fill_size,
-            timestamp_ns=time.time_ns(),
+            timestamp_ns=fill_timestamp_ns,
             pnl=trade.get("pnl", 0.0),
         )
 

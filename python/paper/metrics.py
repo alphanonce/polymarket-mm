@@ -5,8 +5,8 @@ Calculates performance metrics: Sharpe ratio, max drawdown, win rate, etc.
 """
 
 import math
-from dataclasses import dataclass, field
-from typing import List
+from dataclasses import dataclass
+from typing import Any
 
 import structlog
 
@@ -47,9 +47,9 @@ class MetricsCalculator:
         self.state.max_equity = initial_equity
 
         # Track returns for Sharpe calculation
-        self._equity_history: List[float] = [initial_equity]
-        self._returns: List[float] = []
-        self._pnl_history: List[float] = []
+        self._equity_history: list[float] = [initial_equity]
+        self._returns: list[float] = []
+        self._pnl_history: list[float] = []
 
         self._logger = logger.bind(component="metrics_calculator")
 
@@ -126,7 +126,7 @@ class MetricsCalculator:
         """Get current metrics state."""
         return self.state
 
-    def get_summary(self) -> dict:
+    def get_summary(self) -> dict[str, Any]:
         """Get metrics summary as dict."""
         return {
             "total_pnl": self.state.total_pnl,

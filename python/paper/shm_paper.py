@@ -9,7 +9,6 @@ import mmap
 import os
 import time
 from pathlib import Path
-from typing import Optional
 
 import structlog
 
@@ -132,9 +131,9 @@ class PaperSHMWriter:
     """Writes paper trading state to SHM for Go to persist."""
 
     def __init__(self) -> None:
-        self._mm: Optional[mmap.mmap] = None
-        self._layout: Optional[PaperTradingState] = None
-        self._fd: Optional[int] = None
+        self._mm: mmap.mmap | None = None
+        self._layout: PaperTradingState | None = None
+        self._fd: int | None = None
         self._position_map: dict[str, int] = {}  # asset_id -> index
         self._quote_map: dict[str, int] = {}  # slug -> index
         self._logger = logger.bind(component="paper_shm_writer")

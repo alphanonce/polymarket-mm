@@ -7,7 +7,6 @@ Provides various fill simulation modes for paper trading.
 import random
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Optional, Tuple
 
 from strategy.shm.types import SIDE_BUY, SIDE_SELL, MarketState
 
@@ -263,7 +262,7 @@ class OrderSimulator:
         side: int,
         size: float,
         market: MarketState,
-    ) -> Tuple[float, float]:
+    ) -> tuple[float, float]:
         """
         Estimate fill price including market impact for large orders.
 
