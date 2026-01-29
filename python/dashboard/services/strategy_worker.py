@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from multiprocessing import Queue
 from typing import Any
@@ -16,6 +17,7 @@ import structlog
 
 from dashboard.config import StrategyConfig
 from dashboard.models.schemas import (
+    AssetMetrics,
     DashboardState,
     FillInfo,
     LevelInfo,
@@ -39,6 +41,11 @@ from strategy.shm.types import SIDE_BUY, SIDE_SELL, MarketState, PositionState
 logger = structlog.get_logger()
 
 
+# Max history size: 7 days @ 500ms interval = 1,209,600 entries
+# For inventory/quote history (high frequency)
+MAX_HISTORY_SIZE = 1209600
+
+
 @dataclass
 class WorkerState:
     """Internal state tracking for the worker."""
@@ -47,10 +54,17 @@ class WorkerState:
     tick_count: int = 0
     last_broadcast_time: float = 0.0
     last_equity_snapshot: float = 0.0
-    inventory_history: list[tuple[int, float]] = field(default_factory=list)
-    quote_history: list[tuple[int, str, float | None, float | None, float, float, float]] = field(
-        default_factory=list
+    # Per-asset inventory history (deque with maxlen for automatic size management)
+    inventory_history_by_asset: dict[str, deque[tuple[int, float]]] = field(
+        default_factory=dict
     )
+    # Quote history with asset field for filtering
+    quote_history: deque[tuple[int, str, str, float | None, float | None, float, float, float]] = (
+        field(default_factory=lambda: deque(maxlen=MAX_HISTORY_SIZE))
+    )
+    # Per-asset trade counts for metrics
+    trades_by_asset: dict[str, int] = field(default_factory=dict)
+    wins_by_asset: dict[str, int] = field(default_factory=dict)
 
 
 class _DummyStore:
@@ -107,11 +121,14 @@ class StrategyWorker:
         # Per-market quote models (for models that need market-specific config like end_ts)
         self._market_quote_models: dict[str, QuoteModel] = {}
 
+        # Per-market size models (for period-based bankroll management)
+        self._market_size_models: dict[str, SizeModel] = {}
+
         # Configuration
         self._tick_interval_ms = 100
         self._broadcast_interval_ms = 200
         self._equity_snapshot_interval_s = 60
-        self._quote_interval_ms = 500  # Generate quotes every 500ms
+        self._quote_interval_ms = 100  # Generate quotes every 100ms (POST_ONLY)
         self._last_quote_time: float = 0.0
 
         # Store last quote results for display
@@ -176,6 +193,11 @@ class StrategyWorker:
             )
             self._market_quote_models[market.slug] = market_quote_model
 
+            # Create market-specific size model for period-based bankroll management
+            # Each market captures its own period bankroll at start
+            market_size_model = create_size_model(self.config.size_model)
+            self._market_size_models[market.slug] = market_size_model
+
             self._logger.info(
                 "Subscribed to market",
                 slug=market.slug,
@@ -233,6 +255,16 @@ class StrategyWorker:
                 fills.extend(market_fills)
                 for fill in market_fills:
                     self._metrics.record_trade(fill.pnl)
+                    # Track per-asset trades and wins
+                    asset = fill.slug.split("-")[0].lower() if fill.slug else ""
+                    if asset:
+                        self._state.trades_by_asset[asset] = (
+                            self._state.trades_by_asset.get(asset, 0) + 1
+                        )
+                        if fill.pnl > 0:
+                            self._state.wins_by_asset[asset] = (
+                                self._state.wins_by_asset.get(asset, 0) + 1
+                            )
 
         # Update unrealized PnL
         self._update_unrealized_pnl(markets)
@@ -309,12 +341,13 @@ class StrategyWorker:
             spread = best_ask - best_bid
 
             # Get our quotes if available
+            # price=0 means that side should not be quoted (out of valid range)
             our_bid: float | None = None
             our_ask: float | None = None
             quote_result = self._last_quote_results.get(slug)
             if quote_result and quote_result.should_quote:
-                our_bid = quote_result.bid_price
-                our_ask = quote_result.ask_price
+                our_bid = quote_result.bid_price if quote_result.bid_price > 0 else None
+                our_ask = quote_result.ask_price if quote_result.ask_price > 0 else None
 
             quotes.append(
                 MarketQuote(
@@ -337,12 +370,16 @@ class StrategyWorker:
         # Build fills list
         fill_infos: list[FillInfo] = []
         for fill in recent_fills:
+            # Extract asset from slug (e.g., "btc-updown-15m" → "btc")
+            asset = fill.slug.split("-")[0].lower() if fill.slug else ""
             fill_infos.append(
                 FillInfo(
                     signal_id=fill.signal_id,
                     asset_id=fill.asset_id,
                     slug=fill.slug,
+                    asset=asset,
                     side="BUY" if fill.side == SIDE_BUY else "SELL",
+                    token_side=fill.token_side,
                     price=fill.price,
                     size=fill.size,
                     pnl=fill.pnl,
@@ -355,14 +392,17 @@ class StrategyWorker:
             return
         # Use signal_id set for deduplication instead of object identity
         recent_signal_ids = {f.signal_id for f in recent_fills}
-        for fill in self._paper_executor.get_recent_fills(20):
+        for fill in self._paper_executor.get_recent_fills(50):
             if fill.signal_id not in recent_signal_ids:
+                asset = fill.slug.split("-")[0].lower() if fill.slug else ""
                 fill_infos.append(
                     FillInfo(
                         signal_id=fill.signal_id,
                         asset_id=fill.asset_id,
                         slug=fill.slug,
+                        asset=asset,
                         side="BUY" if fill.side == SIDE_BUY else "SELL",
+                        token_side=fill.token_side,
                         price=fill.price,
                         size=fill.size,
                         pnl=fill.pnl,
@@ -373,29 +413,83 @@ class StrategyWorker:
         # Get metrics state
         metrics_state = self._metrics.get_state()
 
-        # Calculate total inventory
-        total_inventory = sum(pos.size * (1 if pos.side == "up" else -1) for pos in positions)
-
-        # Update inventory history
         now_ms = int(time.time() * 1000)
-        self._state.inventory_history.append((now_ms, total_inventory))
-        # Keep only last 172800 points (24 hours @ 500ms interval)
-        if len(self._state.inventory_history) > 172800:
-            self._state.inventory_history = self._state.inventory_history[-172800:]
 
-        # Build quote history points (send full history)
+        # Calculate per-asset inventory and update history
+        inventory_by_asset: dict[str, float] = {}
+        for position in positions:
+            # Extract asset from slug (e.g., "btc-updown-15m" → "btc")
+            asset = position.slug.split("-")[0].lower() if position.slug else ""
+            if asset:
+                inv = position.size if position.side == "up" else -position.size
+                inventory_by_asset[asset] = inventory_by_asset.get(asset, 0.0) + inv
+
+        # Update per-asset inventory history
+        for asset, inv in inventory_by_asset.items():
+            if asset not in self._state.inventory_history_by_asset:
+                self._state.inventory_history_by_asset[asset] = deque(maxlen=MAX_HISTORY_SIZE)
+            self._state.inventory_history_by_asset[asset].append((now_ms, inv))
+
+        # Calculate total inventory (sum of per-asset)
+        total_inventory = sum(inventory_by_asset.values())
+
+        # Build per-asset fill history
+        fills_by_asset: dict[str, list[FillInfo]] = {}
+        for fill_info in fill_infos:
+            asset = fill_info.asset.lower() if fill_info.asset else ""
+            if asset:
+                if asset not in fills_by_asset:
+                    fills_by_asset[asset] = []
+                fills_by_asset[asset].append(fill_info)
+
+        # Build per-asset metrics
+        pnl_by_asset = self._position_tracker.get_pnl_by_asset()
+        metrics_by_asset: dict[str, AssetMetrics] = {}
+        for asset in set(list(inventory_by_asset.keys()) + list(pnl_by_asset.keys())):
+            # Count trades and wins for this asset
+            asset_trades = self._state.trades_by_asset.get(asset, 0)
+            asset_wins = self._state.wins_by_asset.get(asset, 0)
+            asset_pnl = pnl_by_asset.get(asset, 0.0)
+
+            # Get realized/unrealized breakdown
+            realized = 0.0
+            unrealized = 0.0
+            for position in positions:
+                pos_asset = position.slug.split("-")[0].lower() if position.slug else ""
+                if pos_asset == asset:
+                    realized += position.realized_pnl
+                    unrealized += position.unrealized_pnl
+
+            metrics_by_asset[asset] = AssetMetrics(
+                asset=asset,
+                total_trades=asset_trades,
+                win_count=asset_wins,
+                win_rate=asset_wins / asset_trades if asset_trades > 0 else 0.0,
+                total_pnl=asset_pnl,
+                realized_pnl=realized,
+                unrealized_pnl=unrealized,
+                inventory=inventory_by_asset.get(asset, 0.0),
+            )
+
+        # Build quote history points (send full history with asset field)
         quote_history_points = [
             QuoteHistoryPoint(
                 timestamp_ms=ts,
                 slug=slug,
+                asset=asset,
                 our_bid=bid,
                 our_ask=ask,
                 mid_price=mid,
                 best_bid=best_bid,
                 best_ask=best_ask,
             )
-            for ts, slug, bid, ask, mid, best_bid, best_ask in self._state.quote_history
+            for ts, slug, asset, bid, ask, mid, best_bid, best_ask in self._state.quote_history
         ]
+
+        # Convert per-asset inventory history to serializable format
+        inventory_history_by_asset_serialized = {
+            asset: list(hist) for asset, hist in self._state.inventory_history_by_asset.items()
+        }
 
         # Build state
         state = DashboardState(
@@ -407,20 +501,25 @@ class StrategyWorker:
             total_pnl=self._position_tracker.total_pnl,
             realized_pnl=self._position_tracker.realized_pnl,
             unrealized_pnl=self._position_tracker.unrealized_pnl,
-            pnl_by_asset=self._position_tracker.get_pnl_by_asset(),
+            pnl_by_asset=pnl_by_asset,
             positions=positions,
             total_inventory=total_inventory,
             quotes=quotes,
-            recent_fills=fill_infos[:20],
+            recent_fills=fill_infos[:50],
             total_trades=metrics_state.total_trades,
             win_count=metrics_state.win_count,
             win_rate=metrics_state.win_rate,
             sharpe_ratio=metrics_state.sharpe_ratio,
             max_drawdown=metrics_state.max_drawdown,
             current_drawdown=metrics_state.current_drawdown,
-            equity_history=self._position_tracker.get_equity_history(172800),
-            inventory_history=self._state.inventory_history,
+            equity_history=self._position_tracker.get_equity_history(MAX_HISTORY_SIZE),
+            equity_history_by_asset=self._position_tracker.get_equity_history_by_asset(
+                MAX_HISTORY_SIZE
+            ),
+            inventory_history_by_asset=inventory_history_by_asset_serialized,
             quote_history=quote_history_points,
+            metrics_by_asset=metrics_by_asset,
+            fills_by_asset=fills_by_asset,
             status="running",
             timestamp_ms=now_ms,
         )
@@ -452,6 +551,8 @@ class StrategyWorker:
                 del self._active_markets[slug]
                 if slug in self._market_quote_models:
                     del self._market_quote_models[slug]
+                if slug in self._market_size_models:
+                    del self._market_size_models[slug]
                 if slug in self._last_quote_results:
                     del self._last_quote_results[slug]
                 continue
@@ -480,27 +581,30 @@ class StrategyWorker:
             # Store quote result for display
             self._last_quote_results[slug] = quote_result
 
-            # Record quote history if we should quote
-            if quote_result.should_quote:
+            # Record quote history if we should quote (at least one side valid)
+            # price=0 means that side should not be quoted
+            bid_price = quote_result.bid_price if quote_result.bid_price > 0 else None
+            ask_price = quote_result.ask_price if quote_result.ask_price > 0 else None
+            if quote_result.should_quote and (bid_price is not None or ask_price is not None):
                 # Use market timestamp for consistency with quote model T calculation
                 market_timestamp_ms = market.timestamp_ns // 1_000_000
                 best_bid = market.bids[0][0]
                 best_ask = market.asks[0][0]
                 mid_price = (best_bid + best_ask) / 2
+                # deque handles maxlen automatically
+                # Include asset for per-asset filtering
                 self._state.quote_history.append(
                     (
                         market_timestamp_ms,
                         slug,
-                        quote_result.bid_price,
-                        quote_result.ask_price,
+                        market_info.asset.lower(),  # asset field for filtering
+                        bid_price,
+                        ask_price,
                         mid_price,
                         best_bid,
                         best_ask,
                     )
                 )
-                # Keep only last 172800 points (24 hours @ 500ms interval)
-                if len(self._state.quote_history) > 172800:
-                    self._state.quote_history = self._state.quote_history[-172800:]
 
             if not quote_result.should_quote:
                 self._logger.debug(
@@ -510,15 +614,21 @@ class StrategyWorker:
                 )
                 continue
 
-            # Compute sizes
+            # Compute sizes using market-specific size model
+            # Each market has its own period bankroll captured at market start
+            size_model = self._market_size_models.get(slug, self._size_model)
+            if not size_model:
+                continue
+
             try:
-                size_result = self._size_model.compute(state, quote_result)
+                size_result = size_model.compute(state, quote_result)
             except Exception as e:
                 self._logger.debug("Size computation failed", slug=slug, error=str(e))
                 continue
 
             # Place bid order (want to go long)
-            if size_result.bid_size > 0:
+            # price > 0 check: price=0 means that side should not be quoted
+            if quote_result.bid_price > 0 and size_result.bid_size > 0:
                 self._place_quote_order(
                     slug=slug,
                     market_info=market_info,
@@ -529,7 +639,8 @@ class StrategyWorker:
                 )
 
             # Place ask order (want to go short)
-            if size_result.ask_size > 0:
+            # price > 0 check: price=0 means that side should not be quoted
+            if quote_result.ask_price > 0 and size_result.ask_size > 0:
                 self._place_quote_order(
                     slug=slug,
                     market_info=market_info,
@@ -603,11 +714,21 @@ class StrategyWorker:
                     realized_pnl=realized_pnl,
                 )
 
+        # Use per-asset equity for independent sizing per asset
+        # Each asset gets full initial_equity ($10k) as base capital
+        asset = market_info.asset.lower()
+        asset_equity = (
+            self._position_tracker.get_equity_for_asset(asset) if self._position_tracker else 0.0
+        )
+        asset_cash = (
+            self._position_tracker.get_cash_for_asset(asset) if self._position_tracker else 0.0
+        )
+
         return StrategyState(
             market=market,
             position=position,
-            total_equity=self._position_tracker.total_equity if self._position_tracker else 0.0,
-            available_margin=self._position_tracker.cash if self._position_tracker else 0.0,
+            total_equity=asset_equity,  # Per-asset equity for sizing
+            available_margin=asset_cash,  # Per-asset available margin
         )
 
     def _place_quote_order(
@@ -641,32 +762,89 @@ class StrategyWorker:
         down_size = down_position["size"] if down_position else 0.0
 
         # Determine which token to trade and which side
-        if quote_side == SIDE_BUY:  # BID quote
-            # Bid = want to go long
-            # If holding DOWN tokens >= order size, sell DOWN (close short)
-            # Otherwise, buy UP (open long)
-            if down_size >= size:
-                asset_id = market_info.token_id_down
-                trade_side = SIDE_SELL
-                token_side = "down"
-            else:
-                asset_id = market_info.token_id_up
-                trade_side = SIDE_BUY
-                token_side = "up"
-        else:  # ASK quote (SIDE_SELL)
-            # Ask = want to go short
-            # If holding UP tokens >= order size, sell UP (close long)
-            # Otherwise, buy DOWN (open short)
-            if up_size >= size:
-                asset_id = market_info.token_id_up
-                trade_side = SIDE_SELL
-                token_side = "up"
-            else:
-                asset_id = market_info.token_id_down
-                trade_side = SIDE_BUY
-                token_side = "down"
+        # Priority: First close existing opposite position, then open new position
+        remaining_size = size
 
-        # Get market data for the selected token
+        if quote_side == SIDE_BUY:  # BID quote - want to go long
+            # First: If holding DOWN tokens, sell them to close short
+            if down_size > 0.001 and remaining_size > 0.001:
+                close_size = min(down_size, remaining_size)
+                self._execute_single_order(
+                    slug=slug,
+                    market_info=market_info,
+                    asset_id=market_info.token_id_down,
+                    trade_side=SIDE_SELL,
+                    token_side="down",
+                    price=price,
+                    size=close_size,
+                    markets=markets,
+                )
+                remaining_size -= close_size
+
+            # Then: Buy UP tokens for remaining size
+            if remaining_size > 0.001:
+                self._execute_single_order(
+                    slug=slug,
+                    market_info=market_info,
+                    asset_id=market_info.token_id_up,
+                    trade_side=SIDE_BUY,
+                    token_side="up",
+                    price=price,
+                    size=remaining_size,
+                    markets=markets,
+                )
+
+        else:  # ASK quote (SIDE_SELL) - want to go short
+            # First: If holding UP tokens, sell them to close long
+            if up_size > 0.001 and remaining_size > 0.001:
+                close_size = min(up_size, remaining_size)
+                self._execute_single_order(
+                    slug=slug,
+                    market_info=market_info,
+                    asset_id=market_info.token_id_up,
+                    trade_side=SIDE_SELL,
+                    token_side="up",
+                    price=price,
+                    size=close_size,
+                    markets=markets,
+                )
+                remaining_size -= close_size
+
+            # Then: Buy DOWN tokens for remaining size
+            if remaining_size > 0.001:
+                self._execute_single_order(
+                    slug=slug,
+                    market_info=market_info,
+                    asset_id=market_info.token_id_down,
+                    trade_side=SIDE_BUY,
+                    token_side="down",
+                    price=price,
+                    size=remaining_size,
+                    markets=markets,
+                )
+
+        return  # Early return - _execute_single_order handles everything
+
+    def _execute_single_order(
+        self,
+        slug: str,
+        market_info: MarketInfo,
+        asset_id: str,
+        trade_side: int,
+        token_side: str,
+        price: float,
+        size: float,
+        markets: dict[str, MarketState],
+    ) -> None:
+        """
+        Execute a single order for the given token using POST_ONLY simulation.
+
+        Only regenerates order if price has changed. Uses submit_order()
+        for POST_ONLY behavior (no immediate taker fills).
+        """
+        if not self._paper_executor or not self._metrics:
+            return
+
         market = markets.get(asset_id)
         if not market or not market.bids or not market.asks:
             self._logger.debug(
@@ -677,13 +855,18 @@ class StrategyWorker:
             )
             return
 
-        # Cancel any existing orders for this asset/side first
+        # Check existing orders for this asset/side
+        # Only regenerate if price has changed
         existing_orders = self._paper_executor.get_open_orders(asset_id)
         for order in existing_orders:
             if order.signal.side == trade_side:
+                # Price unchanged (within tolerance) - keep existing order
+                if abs(order.signal.price - price) < 0.0001:
+                    return
+                # Price changed - cancel and regenerate
                 self._paper_executor.cancel_order(order.signal.signal_id)
 
-        # Create and submit new order
+        # Create and submit new order (POST_ONLY - no immediate execution)
         signal = self._paper_executor.create_signal(
             asset_id=asset_id,
             slug=slug,
@@ -693,19 +876,8 @@ class StrategyWorker:
             token_side=token_side,
         )
 
-        fill = self._paper_executor.process_signal(signal, market)
-        if fill:
-            self._metrics.record_trade(fill.pnl)
-            self._logger.info(
-                "Quote filled",
-                slug=slug,
-                quote_side="BID" if quote_side == SIDE_BUY else "ASK",
-                token_side=token_side,
-                trade_side="BUY" if trade_side == SIDE_BUY else "SELL",
-                price=fill.price,
-                size=fill.size,
-                pnl=fill.pnl,
-            )
+        # Use submit_order for POST_ONLY behavior (fills only via crossing)
+        self._paper_executor.submit_order(signal, market)
 
     def _settle_expired_positions(
         self,

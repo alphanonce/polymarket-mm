@@ -130,6 +130,9 @@ def paper_shm_size() -> int:
 class PaperSHMWriter:
     """Writes paper trading state to SHM for Go to persist."""
 
+    # Minimum interval between flushes (seconds)
+    FLUSH_INTERVAL_S = 1.0
+
     def __init__(self) -> None:
         self._mm: mmap.mmap | None = None
         self._layout: PaperTradingState | None = None
@@ -137,6 +140,9 @@ class PaperSHMWriter:
         self._position_map: dict[str, int] = {}  # asset_id -> index
         self._quote_map: dict[str, int] = {}  # slug -> index
         self._logger = logger.bind(component="paper_shm_writer")
+        # Dirty tracking for flush debouncing
+        self._dirty: bool = False
+        self._last_flush_time: float = 0.0
 
     def connect(self) -> None:
         """Create and connect to paper trading SHM."""
@@ -188,10 +194,11 @@ class PaperSHMWriter:
         self._layout = None
 
     def _increment_sequence(self) -> None:
-        """Increment state sequence number."""
+        """Increment state sequence number and mark as dirty."""
         if self._layout:
             self._layout.state_sequence += 1
             self._layout.last_update_ns = time.time_ns()
+            self._dirty = True
 
     def update_position(
         self,
@@ -342,10 +349,37 @@ class PaperSHMWriter:
 
         self._increment_sequence()
 
-    def flush(self) -> None:
-        """Flush changes to SHM."""
-        if self._mm is not None:
-            self._mm.flush()
+    def flush(self, force: bool = False) -> None:
+        """
+        Flush changes to SHM with debouncing.
+
+        Args:
+            force: If True, flush immediately regardless of debounce interval.
+
+        By default, only flushes if:
+        1. There are dirty (unwritten) changes, AND
+        2. At least FLUSH_INTERVAL_S has passed since last flush
+
+        mmap already syncs writes to kernel buffers; explicit flush() is only
+        needed for durability guarantees (crash recovery). Debouncing reduces
+        syscall overhead while maintaining eventual consistency.
+        """
+        if self._mm is None:
+            return
+
+        now = time.time()
+
+        # Skip if not dirty and not forced
+        if not self._dirty and not force:
+            return
+
+        # Skip if not enough time has passed (unless forced)
+        if not force and (now - self._last_flush_time) < self.FLUSH_INTERVAL_S:
+            return
+
+        self._mm.flush()
+        self._dirty = False
+        self._last_flush_time = now
 
     def __enter__(self) -> "PaperSHMWriter":
         self.connect()

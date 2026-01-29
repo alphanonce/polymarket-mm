@@ -94,6 +94,7 @@ class PaperTradingRunner:
         self._last_metrics_sync = 0.0
         self._last_position_sync = 0.0
         self._last_market_snapshot = 0.0
+        self._last_shm_flush = 0.0
 
     def setup(self) -> None:
         """Initialize all components."""
@@ -185,6 +186,7 @@ class PaperTradingRunner:
                 await self._tick()
             except Exception as e:
                 import traceback
+
                 self._logger.error("Error in tick", error=str(e), traceback=traceback.format_exc())
 
             await asyncio.sleep(tick_interval)
@@ -246,6 +248,11 @@ class PaperTradingRunner:
             self._snapshot_markets(markets)
             self._last_market_snapshot = now
 
+        # Periodic SHM flush (debounced, ~1 second interval)
+        if self._paper_shm and now - self._last_shm_flush > 1.0:
+            self._paper_shm.flush()
+            self._last_shm_flush = now
+
     def _sync_to_shm(self, markets: dict[str, MarketState]) -> None:
         """Sync current state to paper trading SHM."""
         if not self._paper_shm or not self._position_tracker:
@@ -285,7 +292,13 @@ class PaperTradingRunner:
         # Update quotes (our current positions as context)
         for asset_id, market in markets.items():
             quote_position = self._position_tracker.positions.get(asset_id)
-            inventory = quote_position.size if quote_position else 0.0
+            # Convert to directional inventory: UP=positive, DOWN=negative
+            if quote_position:
+                inventory = (
+                    quote_position.size if quote_position.side == "up" else -quote_position.size
+                )
+            else:
+                inventory = 0.0
 
             if market.bids and market.asks:
                 best_bid = market.bids[0][0]
@@ -310,8 +323,6 @@ class PaperTradingRunner:
                     spread=spread,
                     inventory=inventory,
                 )
-
-        self._paper_shm.flush()
 
     def _snapshot_equity(self) -> None:
         """Take equity snapshot."""
@@ -376,11 +387,13 @@ class PaperTradingRunner:
                 continue
 
             position = (
-                self._position_tracker.positions.get(asset_id)
-                if self._position_tracker
-                else None
+                self._position_tracker.positions.get(asset_id) if self._position_tracker else None
             )
-            inventory = position.size if position else 0.0
+            # Convert to directional inventory: UP=positive, DOWN=negative
+            if position:
+                inventory = position.size if position.side == "up" else -position.size
+            else:
+                inventory = 0.0
             slug = (
                 position.slug
                 if position
@@ -465,9 +478,7 @@ class StoreProtocol(Protocol):
 
     def insert_trade(self, trade: dict[str, Any]) -> None: ...
     def upsert_position(self, position: dict[str, Any]) -> None: ...
-    def insert_equity_snapshot(
-        self, equity: float, cash: float, position_value: float
-    ) -> None: ...
+    def insert_equity_snapshot(self, equity: float, cash: float, position_value: float) -> None: ...
     def upsert_metrics(self, **kwargs: Any) -> None: ...
     def insert_market_snapshot(self, **kwargs: Any) -> None: ...
 
@@ -481,9 +492,7 @@ class _DummyStore:
     def upsert_position(self, position: dict[str, Any]) -> None:
         pass
 
-    def insert_equity_snapshot(
-        self, equity: float, cash: float, position_value: float
-    ) -> None:
+    def insert_equity_snapshot(self, equity: float, cash: float, position_value: float) -> None:
         pass
 
     def upsert_metrics(self, **kwargs: Any) -> None:

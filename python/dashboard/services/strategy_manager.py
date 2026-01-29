@@ -262,6 +262,7 @@ class StrategyManager:
                     status=strategy.status,
                     active_markets=len(state.get("quotes", [])),
                     position_count=len(state.get("positions", [])),
+                    pnl_by_asset=state.get("pnl_by_asset", {}),
                 )
             )
 

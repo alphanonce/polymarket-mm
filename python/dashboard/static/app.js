@@ -10,7 +10,7 @@ let pollInterval = null;
 let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 3;  // Reduced for faster fallback to polling
 const RECONNECT_DELAY = 1000;
-const POLL_INTERVAL_MS = 1000;  // Poll every 1 second
+const POLL_INTERVAL_MS = 2000;  // Poll every 2 seconds (reduced from 1s for performance)
 let usePolling = true;  // Use HTTP polling by default (WebSocket often blocked by proxies)
 
 // Filter state
@@ -244,13 +244,14 @@ function renderStrategyCards() {
                 <span class="strategy-card-status ${strategy.status}">${strategy.status}</span>
             </div>
             <div class="strategy-card-pnl ${strategy.total_pnl >= 0 ? 'positive' : 'negative'}">
-                ${formatCurrency(strategy.total_pnl)} (${strategy.pnl_percent.toFixed(2)}%)
+                ${strategy.pnl_percent >= 0 ? '+' : ''}${strategy.pnl_percent.toFixed(2)}%
             </div>
             <div class="strategy-card-asset-pnl">
                 ${['btc', 'eth', 'sol', 'xrp'].map(asset => {
                     const pnl = pnlByAsset[asset] || 0;
+                    const pct = (pnl / 10000) * 100;  // Each asset has $10k base
                     const cls = pnl >= 0 ? 'positive' : 'negative';
-                    return `<span class="asset-pnl ${asset} ${cls}">${asset.toUpperCase()}: ${formatCurrency(pnl)}</span>`;
+                    return `<span class="asset-pnl ${asset} ${cls}">${asset.toUpperCase()}: ${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</span>`;
                 }).join('')}
             </div>
             <div class="strategy-card-meta">
@@ -271,7 +272,7 @@ function updateStrategySelect() {
         <option value="">Select a strategy...</option>
         ${strategies.map(s => `
             <option value="${s.strategy_id}" ${s.strategy_id === currentStrategyId ? 'selected' : ''}>
-                ${escapeHtml(s.name)} (${formatCurrency(s.total_pnl)})
+                ${escapeHtml(s.name)} (${s.pnl_percent >= 0 ? '+' : ''}${s.pnl_percent.toFixed(1)}%)
             </option>
         `).join('')}
     `;
@@ -310,8 +311,13 @@ function updateDashboardState(state) {
         : state;
 
     // Update metrics
-    document.getElementById('currentEquity').textContent = formatCurrency(displayState.current_equity);
-    document.getElementById('metricPnl').textContent = formatCurrency(displayState.total_pnl);
+    // Show PnL % instead of equity amount (each asset has independent $10k capital)
+    const pnlPct = (displayState.total_pnl / displayState.starting_capital) * 100;
+    const pnlPctEl = document.getElementById('currentPnlPct');
+    pnlPctEl.textContent = `${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`;
+    pnlPctEl.className = pnlPct >= 0 ? 'positive' : 'negative';
+    const metricPnlPct = (displayState.total_pnl / displayState.starting_capital) * 100;
+    document.getElementById('metricPnl').textContent = `${metricPnlPct >= 0 ? '+' : ''}${metricPnlPct.toFixed(2)}%`;
     document.getElementById('metricPnl').className = `metric-value ${displayState.total_pnl >= 0 ? 'positive' : 'negative'}`;
     document.getElementById('metricWinRate').textContent = `${(displayState.win_rate * 100).toFixed(1)}%`;
     document.getElementById('metricSharpe').textContent = displayState.sharpe_ratio.toFixed(2);
@@ -331,18 +337,50 @@ function updateDashboardState(state) {
     // Update fills table
     renderFillsTable(displayState.recent_fills || []);
 
-    // Update charts
-    updateEquityChartWrapper(displayState.equity_history || []);
-    updateInventoryChartWrapper(displayState.inventory_history || []);
+    // Update charts (filter to last 1 week for better visualization)
+    const oneWeekAgoMs = Date.now() - (7 * 24 * 3600000);  // 1 week in ms
+
+    // Filter equity history (timestamps in nanoseconds)
+    const filteredEquity = (displayState.equity_history || []).filter(
+        ([ts, _]) => ts / 1000000 > oneWeekAgoMs
+    );
+
+    // Get inventory history - use per-asset if filtered, otherwise aggregate
+    let inventoryHistory = [];
+    if (displayState.inventory_history) {
+        // Already filtered by asset
+        inventoryHistory = displayState.inventory_history;
+    } else if (displayState.inventory_history_by_asset) {
+        // Aggregate all assets for "all" view
+        const allPoints = [];
+        Object.entries(displayState.inventory_history_by_asset).forEach(([asset, history]) => {
+            history.forEach(([ts, inv]) => allPoints.push({ ts, inv, asset }));
+        });
+        // Sum inventory at each unique timestamp
+        const byTime = {};
+        allPoints.forEach(({ ts, inv }) => {
+            byTime[ts] = (byTime[ts] || 0) + inv;
+        });
+        inventoryHistory = Object.entries(byTime)
+            .map(([ts, inv]) => [parseInt(ts), inv])
+            .sort((a, b) => a[0] - b[0]);
+    }
+    // Filter inventory history (timestamps in milliseconds)
+    const filteredInventory = inventoryHistory.filter(([ts, _]) => ts > oneWeekAgoMs);
+
+    updateEquityChartWrapper(filteredEquity);
+    updateInventoryChartWrapper(filteredInventory);
 
     // Store quote data
     lastQuoteHistory = displayState.quote_history || [];
     lastQuotes = displayState.quotes || [];
 
-    // Update quote chart (filter by current market slug)
-    const filteredHistory = currentMarketSlug
+    // Update quote chart (filter by current market slug and last 1 week)
+    let filteredHistory = currentMarketSlug
         ? lastQuoteHistory.filter(p => p.slug === currentMarketSlug)
         : lastQuoteHistory;
+    // Filter to last 1 week
+    filteredHistory = filteredHistory.filter(p => p.timestamp_ms > oneWeekAgoMs);
     updateQuoteChartWrapper(filteredHistory);
 
     // Update current quote display
@@ -410,16 +448,31 @@ function renderFillsTable(fills) {
         return;
     }
 
-    tbody.innerHTML = fills.slice(0, 20).map(fill => `
-        <tr>
-            <td>${formatTime(fill.timestamp_ms)}</td>
-            <td>${escapeHtml(fill.slug)}</td>
-            <td class="${fill.side.toLowerCase()}">${fill.side}</td>
-            <td>${fill.price.toFixed(4)}</td>
-            <td>${fill.size.toFixed(2)}</td>
-            <td class="${fill.pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(fill.pnl)}</td>
-        </tr>
-    `).join('');
+    tbody.innerHTML = fills.slice(0, 50).map(fill => {
+        // Determine display direction based on side and token_side
+        // BUY UP = going long (positive inventory)
+        // BUY DOWN = going short (negative inventory)
+        // SELL UP = closing long
+        // SELL DOWN = closing short
+        const tokenSide = (fill.token_side || 'up').toUpperCase();
+        const isBuy = fill.side === 'BUY';
+        const isUp = tokenSide === 'UP';
+
+        // Color: green for long direction, red for short direction
+        const directionClass = (isBuy && isUp) || (!isBuy && !isUp) ? 'buy' : 'sell';
+        const directionText = `${fill.side} ${tokenSide}`;
+
+        return `
+            <tr>
+                <td>${formatTime(fill.timestamp_ms)}</td>
+                <td>${escapeHtml(fill.slug)}</td>
+                <td class="${directionClass}">${directionText}</td>
+                <td>${fill.price.toFixed(4)}</td>
+                <td>${fill.size.toFixed(2)}</td>
+                <td class="${fill.pnl >= 0 ? 'positive' : 'negative'}">${formatCurrency(fill.pnl)}</td>
+            </tr>
+        `;
+    }).join('');
 }
 
 function handleNewFill(fill) {
@@ -700,26 +753,56 @@ function filterStateByAsset(state, asset) {
 
     filtered.positions = (state.positions || []).filter(matchesAsset);
     filtered.quotes = (state.quotes || []).filter(matchesAsset);
-    filtered.recent_fills = (state.recent_fills || []).filter(matchesAsset);
     filtered.quote_history = (state.quote_history || []).filter(matchesAsset);
 
-    // Recalculate metrics for filtered positions
-    filtered.total_pnl = filtered.positions.reduce(
-        (sum, p) => sum + (p.realized_pnl || 0) + (p.unrealized_pnl || 0), 0
-    );
-    filtered.realized_pnl = filtered.positions.reduce(
-        (sum, p) => sum + (p.realized_pnl || 0), 0
-    );
-    filtered.unrealized_pnl = filtered.positions.reduce(
-        (sum, p) => sum + (p.unrealized_pnl || 0), 0
-    );
-    filtered.total_inventory = filtered.positions.reduce(
-        (sum, p) => sum + (p.size || 0), 0
-    );
+    // Use per-asset fill history if available, otherwise filter from recent_fills
+    if (state.fills_by_asset && state.fills_by_asset[asset]) {
+        filtered.recent_fills = state.fills_by_asset[asset];
+    } else {
+        filtered.recent_fills = (state.recent_fills || []).filter(matchesAsset);
+    }
 
-    // Use asset-specific PnL if available
+    // Use per-asset inventory history if available
+    if (state.inventory_history_by_asset && state.inventory_history_by_asset[asset]) {
+        filtered.inventory_history = state.inventory_history_by_asset[asset];
+    } else {
+        filtered.inventory_history = [];
+    }
+
+    // Use per-asset metrics if available
+    const assetMetrics = state.metrics_by_asset && state.metrics_by_asset[asset];
+    if (assetMetrics) {
+        filtered.total_pnl = assetMetrics.total_pnl;
+        filtered.realized_pnl = assetMetrics.realized_pnl;
+        filtered.unrealized_pnl = assetMetrics.unrealized_pnl;
+        filtered.total_inventory = assetMetrics.inventory;
+        filtered.total_trades = assetMetrics.total_trades;
+        filtered.win_count = assetMetrics.win_count;
+        filtered.win_rate = assetMetrics.win_rate;
+    } else {
+        // Fallback: recalculate from filtered positions
+        filtered.total_pnl = filtered.positions.reduce(
+            (sum, p) => sum + (p.realized_pnl || 0) + (p.unrealized_pnl || 0), 0
+        );
+        filtered.realized_pnl = filtered.positions.reduce(
+            (sum, p) => sum + (p.realized_pnl || 0), 0
+        );
+        filtered.unrealized_pnl = filtered.positions.reduce(
+            (sum, p) => sum + (p.unrealized_pnl || 0), 0
+        );
+        filtered.total_inventory = filtered.positions.reduce(
+            (sum, p) => sum + (p.side === 'up' ? p.size : -p.size), 0
+        );
+    }
+
+    // Use asset-specific PnL if available (overrides metrics)
     if (state.pnl_by_asset && state.pnl_by_asset[asset] !== undefined) {
         filtered.total_pnl = state.pnl_by_asset[asset];
+    }
+
+    // Use asset-specific equity history if available
+    if (state.equity_history_by_asset && state.equity_history_by_asset[asset]) {
+        filtered.equity_history = state.equity_history_by_asset[asset];
     }
 
     return filtered;
@@ -805,4 +888,4 @@ setInterval(() => {
     if (usePolling) {
         loadStrategies();
     }
-}, 5000);
+}, 2000);  // Reduced from 5s to 2s for faster PnL updates on strategy cards
