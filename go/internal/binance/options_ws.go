@@ -188,23 +188,41 @@ func (c *OptionsWSClient) Close() error {
 	return nil
 }
 
-// GetIVData returns the current IV data for a symbol
+// GetIVData returns the current IV data for a symbol (deep copy to prevent data races)
 func (c *OptionsWSClient) GetIVData(symbol string) (*IVData, bool) {
 	c.ivDataMu.RLock()
 	defer c.ivDataMu.RUnlock()
 	data, ok := c.ivData[symbol]
-	return data, ok
+	if !ok {
+		return nil, false
+	}
+	return copyIVData(data), true
 }
 
-// GetAllIVData returns all current IV data
+// GetAllIVData returns all current IV data (deep copies to prevent data races)
 func (c *OptionsWSClient) GetAllIVData() map[string]*IVData {
 	c.ivDataMu.RLock()
 	defer c.ivDataMu.RUnlock()
 	result := make(map[string]*IVData, len(c.ivData))
 	for k, v := range c.ivData {
-		result[k] = v
+		result[k] = copyIVData(v)
 	}
 	return result
+}
+
+// copyIVData creates a deep copy of IVData to prevent data races
+func copyIVData(data *IVData) *IVData {
+	if data == nil {
+		return nil
+	}
+	termStructure := make([]IVTenorPoint, len(data.TermStructure))
+	copy(termStructure, data.TermStructure)
+	return &IVData{
+		Symbol:        data.Symbol,
+		ATMIV:         data.ATMIV,
+		TermStructure: termStructure,
+		Timestamp:     data.Timestamp,
+	}
 }
 
 func (c *OptionsWSClient) readLoop() {

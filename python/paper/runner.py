@@ -135,8 +135,9 @@ class PaperTradingRunner:
             self._supabase_store = _DummyStore()
 
         # Initialize paper executor
-        assert self._position_tracker is not None
-        assert self._supabase_store is not None
+        # Use explicit checks instead of assert (assert is stripped with python -O)
+        if self._position_tracker is None or self._supabase_store is None:
+            raise RuntimeError("PaperTrader setup incomplete: position_tracker or supabase_store is None")
         self._paper_executor = PaperExecutor(
             position_tracker=self._position_tracker,
             supabase_store=self._supabase_store,
@@ -218,10 +219,11 @@ class PaperTradingRunner:
                 for fill in fills:
                     self._metrics.record_trade(fill.pnl)
 
-        # Update unrealized PnL for all positions (both long and short)
+        # Update unrealized PnL for active positions only (O(active) instead of O(all))
         if self._position_tracker:
-            for asset_id, position in self._position_tracker.positions.items():
-                if abs(position.size) > MIN_POSITION_SIZE:
+            for asset_id in self._position_tracker.active_position_ids:
+                position = self._position_tracker.positions.get(asset_id)
+                if position and abs(position.size) > MIN_POSITION_SIZE:
                     pos_market = markets.get(asset_id)
                     if pos_market and pos_market.bids and pos_market.asks:
                         mid_price = (pos_market.bids[0][0] + pos_market.asks[0][0]) / 2
@@ -258,17 +260,19 @@ class PaperTradingRunner:
         if not self._paper_shm or not self._position_tracker:
             return
 
-        # Update positions
-        for asset_id, position in self._position_tracker.positions.items():
-            self._paper_shm.update_position(
-                asset_id=position.asset_id,
-                slug=position.slug,
-                side=position.side,
-                size=position.size,
-                avg_entry_price=position.avg_entry_price,
-                unrealized_pnl=position.unrealized_pnl,
-                realized_pnl=position.realized_pnl,
-            )
+        # Update only active positions (O(active) instead of O(all))
+        for asset_id in self._position_tracker.active_position_ids:
+            position = self._position_tracker.positions.get(asset_id)
+            if position:
+                self._paper_shm.update_position(
+                    asset_id=position.asset_id,
+                    slug=position.slug,
+                    side=position.side,
+                    size=position.size,
+                    avg_entry_price=position.avg_entry_price,
+                    unrealized_pnl=position.unrealized_pnl,
+                    realized_pnl=position.realized_pnl,
+                )
 
         # Update equity
         equity = self._position_tracker.total_equity

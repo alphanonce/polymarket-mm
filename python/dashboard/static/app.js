@@ -139,8 +139,10 @@ function connectWebSocket(strategyId) {
         console.log('WebSocket disconnected', event.code);
         setConnectionStatus(false, 'ws');
 
-        // If 403 or too many retries, switch to polling
-        if (event.code === 1006 || event.code === 403 || reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        // If abnormal closure (1006) or too many retries, switch to polling.
+        // Note: HTTP 403 from server results in code 1006 (abnormal closure) since
+        // the WebSocket handshake never completes.
+        if (event.code === 1006 || reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
             console.log('Switching to HTTP polling mode');
             usePolling = true;
             if (currentStrategyId) {
@@ -191,10 +193,13 @@ function startPolling(strategyId) {
 async function fetchStrategyState(strategyId) {
     try {
         const response = await fetch(`/api/strategies/${strategyId}/state`);
-        if (response.ok) {
-            const state = await response.json();
-            updateDashboardState(state);
+        if (!response.ok) {
+            console.error(`HTTP error ${response.status} fetching strategy state`);
+            setConnectionStatus(false, 'poll');
+            return;
         }
+        const state = await response.json();
+        updateDashboardState(state);
     } catch (error) {
         console.error('Failed to fetch strategy state:', error);
         setConnectionStatus(false, 'poll');

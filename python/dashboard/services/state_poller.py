@@ -295,12 +295,13 @@ class StatePoller:
             total_realized_pnl += p.realized_pnl
             total_unrealized_pnl += p.unrealized_pnl
 
-        # Use positions-based PnL if metrics are 0 (fallback)
-        metrics_total_pnl = metrics.get("total_pnl", 0.0)
+        # Use positions-based PnL if metrics are 0 or NULL (fallback)
+        # Coalesce NULL values from Supabase to 0.0
+        metrics_total_pnl = metrics.get("total_pnl") or 0.0
         calculated_total_pnl = total_realized_pnl + total_unrealized_pnl
         total_pnl = calculated_total_pnl if metrics_total_pnl == 0 else metrics_total_pnl
-        metrics_realized = metrics.get("realized_pnl", 0.0)
-        metrics_unrealized = metrics.get("unrealized_pnl", 0.0)
+        metrics_realized = metrics.get("realized_pnl") or 0.0
+        metrics_unrealized = metrics.get("unrealized_pnl") or 0.0
         realized_pnl = total_realized_pnl if metrics_realized == 0 else metrics_realized
         unrealized_pnl = total_unrealized_pnl if metrics_unrealized == 0 else metrics_unrealized
         current_equity = total_pnl + starting_capital

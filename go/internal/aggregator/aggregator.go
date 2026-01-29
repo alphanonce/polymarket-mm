@@ -277,15 +277,21 @@ func (a *Aggregator) onOptionsIVUpdate(symbol string, data *binance.IVData) {
 	}
 
 	// Convert binance.IVData to shm.ImpliedVolData
+	// Cap NumTenors to MaxIVTenors to match the number of actually copied entries
+	numTenors := len(data.TermStructure)
+	if numTenors > shm.MaxIVTenors {
+		numTenors = shm.MaxIVTenors
+	}
+
 	ivData := shm.ImpliedVolData{
 		Symbol:      shm.StringToSymbol(symbol),
 		ATMIV:       data.ATMIV,
 		TimestampNs: uint64(data.Timestamp.UnixNano()),
-		NumTenors:   uint32(len(data.TermStructure)),
+		NumTenors:   uint32(numTenors),
 	}
 
 	// Copy term structure (up to MaxIVTenors)
-	for i := 0; i < len(data.TermStructure) && i < shm.MaxIVTenors; i++ {
+	for i := 0; i < numTenors; i++ {
 		ivData.TermStructure[i] = shm.IVTenorPoint{
 			DaysToExpiry: data.TermStructure[i].DaysToExpiry,
 			ATMIV:        data.TermStructure[i].ATMIV,

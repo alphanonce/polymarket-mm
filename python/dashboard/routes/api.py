@@ -67,7 +67,12 @@ async def list_strategies(
     """List all strategies with summary cards. Optionally filter by asset."""
     # Try strategy manager first (trading mode), then state poller (monitoring mode)
     if _strategy_manager:
-        return _strategy_manager.get_strategy_cards()
+        cards = _strategy_manager.get_strategy_cards()
+        # Apply asset filtering for consistency with monitoring mode
+        if asset:
+            asset_lower = asset.lower()
+            cards = [c for c in cards if asset_lower in [a.lower() for a in c.assets]]
+        return cards
     if not _state_poller:
         raise HTTPException(status_code=503, detail="Service not ready")
 

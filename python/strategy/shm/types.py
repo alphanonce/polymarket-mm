@@ -383,6 +383,9 @@ class IVState:
             t1, iv1 = self.term_structure[i]
             t2, iv2 = self.term_structure[i + 1]
             if t1 <= tte_days <= t2:
+                # Guard against division by zero (identical tenor points)
+                if t2 == t1:
+                    return iv1
                 weight = (tte_days - t1) / (t2 - t1)
                 return iv1 + weight * (iv2 - iv1)
 

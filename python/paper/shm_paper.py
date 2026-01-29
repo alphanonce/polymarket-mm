@@ -167,8 +167,10 @@ class PaperSHMWriter:
         self._layout.magic = PAPER_SHM_MAGIC
         self._layout.version = PAPER_SHM_VERSION
 
-        # Always reset quote and position counts since our in-memory maps are empty
-        # (positions/quotes will be re-populated from the paper trading engine)
+        # Clear in-memory maps and reset counts on reconnect.
+        # This ensures maps stay in sync with SHM slot indices.
+        self._position_map.clear()
+        self._quote_map.clear()
         self._layout.num_positions = 0
         self._layout.num_quotes = 0
 
@@ -348,6 +350,30 @@ class PaperSHMWriter:
         self._layout.last_metrics_ns = time.time_ns()
 
         self._increment_sequence()
+
+    def remove_position(self, asset_id: str) -> None:
+        """
+        Remove a position from tracking when it becomes inactive.
+
+        This prevents unbounded growth of _position_map for closed positions.
+        Note: The SHM slot is not reclaimed (positions array is fixed size),
+        but the Python-side map is cleaned up.
+        """
+        if asset_id in self._position_map:
+            del self._position_map[asset_id]
+            self._logger.debug("Removed position from tracking", asset_id=asset_id)
+
+    def remove_quote(self, slug: str) -> None:
+        """
+        Remove a quote from tracking when it becomes stale.
+
+        This prevents unbounded growth of _quote_map for old markets.
+        Note: The SHM slot is not reclaimed (quotes array is fixed size),
+        but the Python-side map is cleaned up.
+        """
+        if slug in self._quote_map:
+            del self._quote_map[slug]
+            self._logger.debug("Removed quote from tracking", slug=slug)
 
     def flush(self, force: bool = False) -> None:
         """
