@@ -31,7 +31,7 @@ SLUG_LEN = 64
 class PaperPosition(ctypes.Structure):
     """Paper position in SHM."""
 
-    _pack_ = 1
+    # No _pack_ - use natural alignment to match Go
     _fields_ = [
         ("asset_id", ctypes.c_char * ASSET_ID_LEN),
         ("slug", ctypes.c_char * SLUG_LEN),
@@ -48,7 +48,7 @@ class PaperPosition(ctypes.Structure):
 class PaperQuote(ctypes.Structure):
     """Paper quote in SHM."""
 
-    _pack_ = 1
+    # No _pack_ - use natural alignment to match Go
     _fields_ = [
         ("slug", ctypes.c_char * SLUG_LEN),
         ("our_bid", ctypes.c_double),
@@ -65,7 +65,7 @@ class PaperQuote(ctypes.Structure):
 class PaperTrade(ctypes.Structure):
     """Paper trade in SHM (ring buffer)."""
 
-    _pack_ = 1
+    # No _pack_ - use natural alignment to match Go
     _fields_ = [
         ("asset_id", ctypes.c_char * ASSET_ID_LEN),
         ("slug", ctypes.c_char * SLUG_LEN),
@@ -82,7 +82,7 @@ class PaperTrade(ctypes.Structure):
 class PaperTradingState(ctypes.Structure):
     """Paper trading SHM layout."""
 
-    _pack_ = 1
+    # No _pack_ - use natural alignment to match Go
     _fields_ = [
         # Magic number for validation
         ("magic", ctypes.c_uint32),
@@ -158,17 +158,22 @@ class PaperSHMWriter:
         # Create ctypes structure from mmap (writable)
         self._layout = PaperTradingState.from_buffer(self._mm)
 
-        # Initialize if new
-        if self._layout.magic != PAPER_SHM_MAGIC:
-            self._layout.magic = PAPER_SHM_MAGIC
-            self._layout.version = PAPER_SHM_VERSION
-            self._layout.state_sequence = 0
-            self._layout.num_positions = 0
-            self._layout.num_quotes = 0
+        # Initialize header
+        self._layout.magic = PAPER_SHM_MAGIC
+        self._layout.version = PAPER_SHM_VERSION
+
+        # Always reset quote and position counts since our in-memory maps are empty
+        # (positions/quotes will be re-populated from the paper trading engine)
+        self._layout.num_positions = 0
+        self._layout.num_quotes = 0
+
+        # Only reset trades if magic was different (new file)
+        if self._layout.state_sequence == 0:
             self._layout.num_trades = 0
             self._layout.trades_head = 0
             self._layout.trades_tail = 0
-            self._mm.flush()
+
+        self._mm.flush()
 
         self._logger.info("Connected to paper trading SHM", path=str(shm_path))
 

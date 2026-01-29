@@ -60,8 +60,8 @@ class PaperConfig:
             market_snapshot_interval_s=paper_data.get("market_snapshot_interval_s", 5),
             use_shm=paper_data.get("use_shm", True),
             use_direct_supabase=paper_data.get("use_direct_supabase", False),
-            supabase_url=data.get("supabase", {}).get("url", os.environ.get("SUPABASE_URL", "")),
-            supabase_key=data.get("supabase", {}).get("api_key", os.environ.get("SUPABASE_KEY", "")),
+            supabase_url=data.get("supabase", {}).get("url") or os.environ.get("SUPABASE_URL", ""),
+            supabase_key=data.get("supabase", {}).get("api_key") or os.environ.get("SUPABASE_KEY", ""),
         )
 
 
@@ -173,7 +173,8 @@ class PaperTradingRunner:
             try:
                 await self._tick()
             except Exception as e:
-                self._logger.error("Error in tick", error=str(e))
+                import traceback
+                self._logger.error("Error in tick", error=str(e), traceback=traceback.format_exc())
 
             await asyncio.sleep(tick_interval)
 
@@ -207,8 +208,8 @@ class PaperTradingRunner:
         for asset_id, position in self._position_tracker.positions.items():
             if position.size > 0:
                 market = markets.get(asset_id)
-                if market and market.bids:
-                    mid_price = (market.bids[0][0] + market.asks[0][0]) / 2 if market.asks else market.bids[0][0]
+                if market and market.bids and market.asks:
+                    mid_price = (market.bids[0][0] + market.asks[0][0]) / 2
                     self._position_tracker.update_unrealized_pnl(asset_id, mid_price)
 
         # Sync to paper SHM

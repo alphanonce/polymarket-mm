@@ -297,7 +297,7 @@ class PositionTracker:
     def total_equity(self) -> float:
         """Calculate total equity (cash + position value)."""
         position_value = sum(
-            abs(pos.size) * pos.avg_entry_price + pos.unrealized_pnl
+            pos.size * pos.avg_entry_price + pos.unrealized_pnl
             for pos in self.positions.values()
             if abs(pos.size) > 0.001
         )

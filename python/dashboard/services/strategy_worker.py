@@ -260,7 +260,7 @@ class StrategyWorker:
             return
 
         for asset_id, position in self._position_tracker.positions.items():
-            if position.size > 0:
+            if abs(position.size) > 0.001:
                 market = markets.get(asset_id)
                 if market and market.bids and market.asks:
                     mid_price = (market.bids[0][0] + market.asks[0][0]) / 2
@@ -424,6 +424,7 @@ class StrategyWorker:
             total_pnl=self._position_tracker.total_pnl,
             realized_pnl=self._position_tracker.realized_pnl,
             unrealized_pnl=self._position_tracker.unrealized_pnl,
+            pnl_by_asset=self._position_tracker.get_pnl_by_asset(),
             positions=positions,
             total_inventory=total_inventory,
             quotes=quotes,
@@ -459,9 +460,11 @@ class StrategyWorker:
             return
 
         for slug, market_info in list(self._active_markets.items()):
-            # Skip expired markets
+            # Handle expired markets
             if market_info.is_expired:
-                self._logger.debug("Skipping expired market", slug=slug)
+                self._logger.info("Market expired, settling positions", slug=slug)
+                # Settle any positions in this market
+                self._settle_expired_positions(market_info, markets)
                 # Clean up expired market
                 del self._active_markets[slug]
                 if slug in self._market_quote_models:
@@ -719,6 +722,55 @@ class StrategyWorker:
                 size=fill.size,
                 pnl=fill.pnl,
             )
+
+    def _settle_expired_positions(
+        self,
+        market_info: MarketInfo,
+        markets: dict[str, MarketState],
+    ) -> None:
+        """
+        Settle positions in an expired market.
+
+        For paper trading, we determine outcome based on mid price at expiry:
+        - If mid price > 0.5: UP wins
+        - If mid price <= 0.5: DOWN wins
+        """
+        if not self._position_tracker or not self._metrics:
+            return
+
+        # Get positions in both UP and DOWN tokens
+        up_pos = self._position_tracker.get_position(market_info.token_id_up)
+        down_pos = self._position_tracker.get_position(market_info.token_id_down)
+
+        if not up_pos and not down_pos:
+            return
+
+        # Determine outcome based on last known mid price of UP token
+        up_market = markets.get(market_info.token_id_up)
+        if up_market and up_market.bids and up_market.asks:
+            mid_price = (up_market.bids[0][0] + up_market.asks[0][0]) / 2
+        else:
+            mid_price = 0.5  # Default to 50/50 if no market data
+
+        # Determine winning outcome
+        outcome = "up" if mid_price > 0.5 else "down"
+
+        self._logger.info(
+            "Settling expired market",
+            slug=market_info.slug,
+            mid_price=mid_price,
+            outcome=outcome,
+        )
+
+        # Settle UP token position
+        if up_pos and abs(up_pos["size"]) > 0.001:
+            pnl = self._position_tracker.settle_position(market_info.token_id_up, outcome)
+            self._metrics.record_trade(pnl)
+
+        # Settle DOWN token position (inverse outcome for down token)
+        if down_pos and abs(down_pos["size"]) > 0.001:
+            pnl = self._position_tracker.settle_position(market_info.token_id_down, outcome)
+            self._metrics.record_trade(pnl)
 
     def _snapshot_equity(self) -> None:
         """Take an equity snapshot."""
