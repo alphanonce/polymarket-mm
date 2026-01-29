@@ -729,6 +729,7 @@ class StrategyWorker:
             position=position,
             total_equity=asset_equity,  # Per-asset equity for sizing
             available_margin=asset_cash,  # Per-asset available margin
+            iv_data=self._shm_reader.get_iv_dict() if self._shm_reader else {},
         )
 
     def _place_quote_order(
