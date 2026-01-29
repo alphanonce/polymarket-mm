@@ -188,6 +188,28 @@ This means:
 - Path: `data/datalake/timebased/crypto/updown/{timeframe}/{asset}/price_change_*.parquet.gz`
 - Also available via: `DatalakeOrderbookLoader.get_rtds_prices_for_period()`
 
+## 15-Minute Updown Market Structure
+
+### Underlying Assets
+- BTC (Bitcoin), ETH (Ethereum), SOL (Solana), XRP (Ripple)
+
+### Market Slug Format
+`{asset}-updown-{timeframe}-{timestamp}`
+- Example: `btc-updown-15m-1768665600`
+- Timestamp: Unix epoch seconds of market START time
+
+### UP/DOWN Outcome Determination
+| Condition | Result |
+|-----------|--------|
+| Chainlink End Price >= Chainlink Start Price | **UP wins** (UP token pays $1) |
+| Chainlink End Price < Chainlink Start Price | **DOWN wins** (DOWN token pays $1) |
+
+### Token Structure
+Each market has exactly 2 tokens:
+- **UP token**: Pays $1 if underlying price goes UP
+- **DOWN token**: Pays $1 if underlying price goes DOWN
+- Token price range: $0.01 - $0.99
+
 ## Configuration
 
 All config files in `data/config/`:

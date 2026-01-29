@@ -9,10 +9,12 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from strategy.shm.types import ExternalPriceState, MarketState, PositionState
+from strategy.shm.types import ExternalPriceState, IVState, MarketState, PositionState
 from strategy.utils.polymarket import (
     DEFAULT_MIN_SIZE,
     DEFAULT_SIZE_TICK,
+    MAX_PRICE,
+    MIN_PRICE,
     clamp_price,
     clamp_quantity,
     get_tick_info,
@@ -50,6 +52,9 @@ class StrategyState:
     # Market data
     market: MarketState
     external_prices: dict[str, ExternalPriceState] = field(default_factory=dict)
+
+    # Implied volatility data
+    iv_data: dict[str, IVState] = field(default_factory=dict)
 
     # Position info
     position: PositionState | None = None
@@ -100,6 +105,26 @@ class StrategyState:
         if symbol in self.external_prices:
             return self.external_prices[symbol].price
         return None
+
+    def get_iv(self, symbol: str) -> IVState | None:
+        """Get implied volatility data for a symbol."""
+        return self.iv_data.get(symbol)
+
+    def get_interpolated_iv(self, symbol: str, tte_days: float) -> float | None:
+        """
+        Get interpolated implied volatility for a symbol at given time-to-expiry.
+
+        Args:
+            symbol: Underlying symbol (e.g., "BTCUSDT")
+            tte_days: Time-to-expiry in days
+
+        Returns:
+            Interpolated IV, or None if not available
+        """
+        iv_state = self.iv_data.get(symbol)
+        if iv_state is None:
+            return None
+        return iv_state.interpolate_iv(tte_days)
 
 
 @dataclass
@@ -189,6 +214,9 @@ class QuoteModel(ABC):
         """
         Normalize bid/ask prices with rounding and clamping.
 
+        If a price rounds outside the valid range [MIN_PRICE, MAX_PRICE],
+        it is set to 0.0 to indicate that side should not be quoted.
+
         Args:
             bid: Raw bid price
             ask: Raw ask price
@@ -196,6 +224,7 @@ class QuoteModel(ABC):
 
         Returns:
             Tuple of (normalized_bid, normalized_ask)
+            A value of 0.0 means that side should not be quoted.
         """
         config = self._norm_config
 
@@ -222,10 +251,20 @@ class QuoteModel(ABC):
             if config.round_ask_up:
                 ask = round_ask(ask, ask_tick if config.use_dynamic_tick else None)
 
-        # Clamp to valid range
+        # Invalidate prices outside valid range (instead of clamping)
+        # If bid rounds to < MIN_PRICE, don't quote bid side
+        if bid < MIN_PRICE:
+            bid = 0.0
+        # If ask rounds to > MAX_PRICE, don't quote ask side
+        if ask > MAX_PRICE:
+            ask = 0.0
+
+        # Clamp only valid prices to exact boundaries (handles floating point edge cases)
         if config.clamp_prices:
-            bid = clamp_price(bid)
-            ask = clamp_price(ask)
+            if bid > 0:
+                bid = clamp_price(bid)
+            if ask > 0:
+                ask = clamp_price(ask)
 
         return bid, ask
 

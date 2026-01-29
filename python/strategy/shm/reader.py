@@ -4,19 +4,18 @@ Shared Memory Reader
 Provides read access to the shared memory for the Python strategy layer.
 """
 
-import ctypes
 import mmap
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
 
 from strategy.shm.types import (
+    SHM_MAGIC,
+    SHM_NAME,
     ExternalPriceState,
+    IVState,
     MarketState,
     PositionState,
     SharedMemoryLayout,
-    SHM_MAGIC,
-    SHM_NAME,
     shm_size,
 )
 
@@ -25,8 +24,8 @@ class SHMReader:
     """Read-only access to shared memory."""
 
     def __init__(self) -> None:
-        self._mm: Optional[mmap.mmap] = None
-        self._layout: Optional[SharedMemoryLayout] = None
+        self._mm: mmap.mmap | None = None
+        self._layout: SharedMemoryLayout | None = None
         self._last_sequence: int = 0
 
     def connect(self) -> None:
@@ -114,7 +113,7 @@ class SHMReader:
             raise RuntimeError("Not connected to shared memory")
         return self._layout.available_margin
 
-    def get_markets(self) -> List[MarketState]:
+    def get_markets(self) -> list[MarketState]:
         """Get all markets."""
         if self._layout is None:
             raise RuntimeError("Not connected to shared memory")
@@ -124,7 +123,7 @@ class SHMReader:
             markets.append(MarketState.from_ctypes(self._layout.markets[i]))
         return markets
 
-    def get_market(self, asset_id: str) -> Optional[MarketState]:
+    def get_market(self, asset_id: str) -> MarketState | None:
         """Get a specific market by asset ID."""
         if self._layout is None:
             raise RuntimeError("Not connected to shared memory")
@@ -134,11 +133,11 @@ class SHMReader:
                 return MarketState.from_ctypes(self._layout.markets[i])
         return None
 
-    def get_markets_dict(self) -> Dict[str, MarketState]:
+    def get_markets_dict(self) -> dict[str, MarketState]:
         """Get all markets as a dictionary keyed by asset ID."""
         return {m.asset_id: m for m in self.get_markets()}
 
-    def get_external_prices(self) -> List[ExternalPriceState]:
+    def get_external_prices(self) -> list[ExternalPriceState]:
         """Get all external prices."""
         if self._layout is None:
             raise RuntimeError("Not connected to shared memory")
@@ -148,7 +147,7 @@ class SHMReader:
             prices.append(ExternalPriceState.from_ctypes(self._layout.external_prices[i]))
         return prices
 
-    def get_external_price(self, symbol: str) -> Optional[ExternalPriceState]:
+    def get_external_price(self, symbol: str) -> ExternalPriceState | None:
         """Get a specific external price by symbol."""
         if self._layout is None:
             raise RuntimeError("Not connected to shared memory")
@@ -158,11 +157,11 @@ class SHMReader:
                 return ExternalPriceState.from_ctypes(self._layout.external_prices[i])
         return None
 
-    def get_external_prices_dict(self) -> Dict[str, ExternalPriceState]:
+    def get_external_prices_dict(self) -> dict[str, ExternalPriceState]:
         """Get all external prices as a dictionary keyed by symbol."""
         return {p.symbol: p for p in self.get_external_prices()}
 
-    def get_positions(self) -> List[PositionState]:
+    def get_positions(self) -> list[PositionState]:
         """Get all positions."""
         if self._layout is None:
             raise RuntimeError("Not connected to shared memory")
@@ -172,7 +171,7 @@ class SHMReader:
             positions.append(PositionState.from_ctypes(self._layout.positions[i]))
         return positions
 
-    def get_position(self, asset_id: str) -> Optional[PositionState]:
+    def get_position(self, asset_id: str) -> PositionState | None:
         """Get a specific position by asset ID."""
         if self._layout is None:
             raise RuntimeError("Not connected to shared memory")
@@ -182,9 +181,33 @@ class SHMReader:
                 return PositionState.from_ctypes(self._layout.positions[i])
         return None
 
-    def get_positions_dict(self) -> Dict[str, PositionState]:
+    def get_positions_dict(self) -> dict[str, PositionState]:
         """Get all positions as a dictionary keyed by asset ID."""
         return {p.asset_id: p for p in self.get_positions()}
+
+    def get_iv_data(self) -> list[IVState]:
+        """Get all implied volatility data."""
+        if self._layout is None:
+            raise RuntimeError("Not connected to shared memory")
+
+        iv_list = []
+        for i in range(self._layout.num_iv_data):
+            iv_list.append(IVState.from_ctypes(self._layout.iv_data[i]))
+        return iv_list
+
+    def get_iv(self, symbol: str) -> IVState | None:
+        """Get implied volatility data for a specific symbol."""
+        if self._layout is None:
+            raise RuntimeError("Not connected to shared memory")
+
+        for i in range(self._layout.num_iv_data):
+            if self._layout.iv_data[i].get_symbol() == symbol:
+                return IVState.from_ctypes(self._layout.iv_data[i])
+        return None
+
+    def get_iv_dict(self) -> dict[str, IVState]:
+        """Get all IV data as a dictionary keyed by symbol."""
+        return {iv.symbol: iv for iv in self.get_iv_data()}
 
     def __enter__(self) -> "SHMReader":
         self.connect()

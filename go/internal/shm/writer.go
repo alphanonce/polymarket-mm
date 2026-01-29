@@ -244,6 +244,31 @@ func (w *Writer) RemoveOpenOrder(orderID string) error {
 	return fmt.Errorf("order not found: %s", orderID)
 }
 
+// RemoveMarket removes a market by asset ID
+func (w *Writer) RemoveMarket(assetID string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	numMarkets := int(w.layout.NumMarkets)
+	for i := 0; i < numMarkets; i++ {
+		if AssetIDToString(w.layout.Markets[i].AssetID) == assetID {
+			// Shift remaining markets
+			for j := i; j < numMarkets-1; j++ {
+				w.layout.Markets[j] = w.layout.Markets[j+1]
+			}
+			// Clear the last slot
+			w.layout.Markets[numMarkets-1] = MarketBook{}
+			w.layout.NumMarkets = uint32(numMarkets - 1)
+
+			// Update state sequence
+			atomic.AddUint32(&w.layout.StateSequence, 1)
+			atomic.StoreUint64(&w.layout.StateTimestampNs, uint64(time.Now().UnixNano()))
+			return nil
+		}
+	}
+	return fmt.Errorf("market not found: %s", assetID)
+}
+
 // SetEquity updates the equity values
 func (w *Writer) SetEquity(total, available float64) {
 	w.mu.Lock()
@@ -290,4 +315,40 @@ func (w *Writer) MarkSignalsProcessed() {
 func (w *Writer) ClearSignals() {
 	atomic.StoreUint32(&w.layout.NumSignals, 0)
 	atomic.StoreUint32(&w.layout.SignalsProcessed, 0)
+}
+
+// UpdateIVData updates or adds implied volatility data for an underlying
+func (w *Writer) UpdateIVData(ivData ImpliedVolData) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	symbol := SymbolToString(ivData.Symbol)
+
+	// Find existing or add new
+	idx := -1
+	numIVData := int(w.layout.NumIVData)
+	for i := 0; i < numIVData; i++ {
+		if SymbolToString(w.layout.IVData[i].Symbol) == symbol {
+			idx = i
+			break
+		}
+	}
+
+	if idx == -1 {
+		if numIVData >= MaxIVData {
+			return fmt.Errorf("max IV data entries reached")
+		}
+		idx = numIVData
+		w.layout.NumIVData = uint32(numIVData + 1)
+	}
+
+	// Update the IV data
+	ivData.TimestampNs = uint64(time.Now().UnixNano())
+	w.layout.IVData[idx] = ivData
+
+	// Update state sequence
+	atomic.AddUint32(&w.layout.StateSequence, 1)
+	atomic.StoreUint64(&w.layout.StateTimestampNs, uint64(time.Now().UnixNano()))
+
+	return nil
 }

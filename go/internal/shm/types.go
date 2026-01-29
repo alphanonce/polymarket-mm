@@ -11,7 +11,7 @@ import (
 // Constants matching shared/shm_layout.h
 const (
 	SHMMagic   uint32 = 0x504D4D4D // "PMMM"
-	SHMVersion uint32 = 1
+	SHMVersion uint32 = 2
 	SHMName    string = "/polymarket_mm_shm"
 
 	MaxMarkets         = 64
@@ -20,10 +20,12 @@ const (
 	MaxPositions       = 64
 	MaxSignals         = 16
 	MaxOpenOrders      = 128
+	MaxIVData          = 8
+	MaxIVTenors        = 6
 
-	AssetIDLen  = 78  // Polymarket token IDs are up to 77 digits + null terminator
-	SymbolLen   = 16
-	OrderIDLen  = 64
+	AssetIDLen = 78 // Polymarket token IDs are up to 77 digits + null terminator
+	SymbolLen  = 16
+	OrderIDLen = 64
 )
 
 // Side constants
@@ -121,6 +123,22 @@ type OrderSignal struct {
 	_padding      [5]byte
 }
 
+// IVTenorPoint represents a single point in the IV term structure
+type IVTenorPoint struct {
+	DaysToExpiry float64
+	ATMIV        float64
+}
+
+// ImpliedVolData represents implied volatility data for a single underlying
+type ImpliedVolData struct {
+	Symbol        [SymbolLen]byte
+	ATMIV         float64 // Shortest tenor IV (fallback)
+	TimestampNs   uint64
+	TermStructure [MaxIVTenors]IVTenorPoint
+	NumTenors     uint32
+	_padding      [4]byte
+}
+
 // SharedMemoryLayout is the main shared memory structure
 type SharedMemoryLayout struct {
 	// Header
@@ -154,6 +172,11 @@ type SharedMemoryLayout struct {
 	NumOpenOrders uint32
 	_padding4     uint32
 	OpenOrders    [MaxOpenOrders]OpenOrder
+
+	// Implied volatility data
+	NumIVData   uint32
+	_paddingIV  uint32
+	IVData      [MaxIVData]ImpliedVolData
 
 	// Strategy state
 	TotalEquity     float64

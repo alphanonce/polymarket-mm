@@ -41,6 +41,11 @@ type Config struct {
 		Symbols []string `yaml:"symbols"`
 	} `yaml:"binance"`
 
+	BinanceOptions struct {
+		Enabled     bool     `yaml:"enabled"`
+		Underlyings []string `yaml:"underlyings"`
+	} `yaml:"binance_options"`
+
 	Chainlink struct {
 		RPCURL string   `yaml:"rpc_url"`
 		Feeds  []string `yaml:"feeds"`
@@ -146,6 +151,20 @@ func main() {
 			}
 		})
 
+		// Remove expired markets from SHM
+		discovery.OnMarketExpired(func(market *polymarket.DiscoveredMarket) {
+			// Remove both up and down tokens from SHM
+			if err := shmWriter.RemoveMarket(market.TokenIDUp); err != nil {
+				logger.Debug("Failed to remove up token from SHM", zap.Error(err))
+			}
+			if err := shmWriter.RemoveMarket(market.TokenIDDown); err != nil {
+				logger.Debug("Failed to remove down token from SHM", zap.Error(err))
+			}
+			logger.Info("Removed expired market from SHM",
+				zap.String("slug", market.Slug),
+			)
+		})
+
 		// Note: discovery.Start() is called later after aggregator is initialized
 		defer discovery.Stop()
 	}
@@ -159,6 +178,21 @@ func main() {
 			logger.Error("Failed to connect to Binance WebSocket", zap.Error(err))
 		} else {
 			defer binanceWS.Close()
+		}
+	}
+
+	// Initialize Binance Options WebSocket client (optional)
+	var optionsWS *binance.OptionsWSClient
+	if cfg.BinanceOptions.Enabled && len(cfg.BinanceOptions.Underlyings) > 0 {
+		optionsWS = binance.NewOptionsWSClient(binance.OptionsWSClientConfig{
+			Logger:      logger,
+			Underlyings: cfg.BinanceOptions.Underlyings,
+		})
+		if err := optionsWS.Connect(); err != nil {
+			logger.Error("Failed to connect to Binance Options WebSocket", zap.Error(err))
+			optionsWS = nil
+		} else {
+			defer optionsWS.Close()
 		}
 	}
 
@@ -182,10 +216,11 @@ func main() {
 
 	// Initialize aggregator
 	agg := aggregator.New(aggregator.Config{
-		Logger:         logger,
-		SHMWriter:      shmWriter,
-		PolyWS:         polyWS,
-		BinanceWS:      binanceWS,
+		Logger:          logger,
+		SHMWriter:       shmWriter,
+		PolyWS:          polyWS,
+		BinanceWS:       binanceWS,
+		OptionsWS:       optionsWS,
 		ChainlinkReader: chainlinkReader,
 	})
 	if err := agg.Start(); err != nil {

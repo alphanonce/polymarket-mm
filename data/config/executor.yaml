@@ -34,6 +34,13 @@ binance:
     - "SOLUSDT"
     - "XRPUSDT"
 
+# Binance Options WebSocket for live IV
+binance_options:
+  enabled: true
+  underlyings:
+    - "BTCUSDT"
+    - "ETHUSDT"
+
 chainlink:
   # Polygon RPC URL for Chainlink feeds
   # rpc_url: "https://polygon-rpc.com"

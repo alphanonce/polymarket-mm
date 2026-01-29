@@ -14,11 +14,13 @@ from dashboard.models.schemas import StrategyCard, StrategySummary
 
 if TYPE_CHECKING:
     from dashboard.services.state_poller import StatePoller
+    from dashboard.services.strategy_manager import StrategyManager
 
 router = APIRouter(prefix="/api", tags=["api"])
 
 # This will be set by the server on startup
 _state_poller: StatePoller | None = None
+_strategy_manager: StrategyManager | None = None
 
 # Available assets
 AVAILABLE_ASSETS = ["btc", "eth", "sol", "xrp"]
@@ -28,6 +30,12 @@ def set_state_poller(poller: StatePoller | None) -> None:
     """Set the state poller instance."""
     global _state_poller
     _state_poller = poller
+
+
+def set_strategy_manager(manager: StrategyManager | None) -> None:
+    """Set the strategy manager instance."""
+    global _strategy_manager
+    _strategy_manager = manager
 
 
 def _extract_assets_from_positions(positions: list[dict[str, Any]]) -> list[str]:
@@ -57,6 +65,14 @@ async def list_strategies(
     asset: str | None = Query(None, description="Filter by asset (btc, eth, sol, xrp)"),
 ) -> list[StrategyCard]:
     """List all strategies with summary cards. Optionally filter by asset."""
+    # Try strategy manager first (trading mode), then state poller (monitoring mode)
+    if _strategy_manager:
+        cards = _strategy_manager.get_strategy_cards()
+        # Apply asset filtering for consistency with monitoring mode
+        if asset:
+            asset_lower = asset.lower()
+            cards = [c for c in cards if asset_lower in [a.lower() for a in c.assets]]
+        return cards
     if not _state_poller:
         raise HTTPException(status_code=503, detail="Service not ready")
 
@@ -167,6 +183,13 @@ async def list_strategies_grouped() -> dict[str, Any]:
 @router.get("/strategies/{strategy_id}", response_model=StrategySummary)
 async def get_strategy(strategy_id: str) -> StrategySummary:
     """Get strategy details."""
+    # Try strategy manager first (trading mode)
+    if _strategy_manager:
+        summary = _strategy_manager.get_strategy_summary(strategy_id)
+        if summary:
+            return summary
+        raise HTTPException(status_code=404, detail="Strategy not found")
+
     if not _state_poller:
         raise HTTPException(status_code=503, detail="Service not ready")
 
@@ -205,17 +228,25 @@ async def get_strategy_state(
     asset: str | None = Query(None, description="Filter by asset (btc, eth, sol, xrp)"),
 ) -> dict[str, Any]:
     """Get current strategy state (snapshot). Optionally filter by asset."""
-    if not _state_poller:
+    # Try strategy manager first (trading mode)
+    if _strategy_manager:
+        strategy = _strategy_manager.get_strategy(strategy_id)
+        if strategy:
+            state_dict = strategy.last_state.copy() if strategy.last_state else {}
+            if not state_dict:
+                return {"status": strategy.status, "strategy_id": strategy_id}
+            # Continue with filtering below
+        else:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+    elif _state_poller:
+        cache = _state_poller.get_strategy(strategy_id)
+        if not cache:
+            raise HTTPException(status_code=404, detail="Strategy not found")
+        if not cache.last_state:
+            return {}
+        state_dict = cache.last_state.model_dump()
+    else:
         raise HTTPException(status_code=503, detail="Service not ready")
-
-    cache = _state_poller.get_strategy(strategy_id)
-    if not cache:
-        raise HTTPException(status_code=404, detail="Strategy not found")
-
-    if not cache.last_state:
-        return {}
-
-    state_dict = cache.last_state.model_dump()
 
     # Filter by asset if specified
     if asset:

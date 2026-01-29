@@ -57,8 +57,9 @@ type DiscoveryService struct {
 	marketsMu sync.RWMutex
 
 	// Callbacks
-	onNewMarket    func(*DiscoveredMarket)
+	onNewMarket       func(*DiscoveredMarket)
 	onBatchDiscovered func([]*DiscoveredMarket) // Called after each discovery round with newly found markets
+	onMarketExpired   func(*DiscoveredMarket)   // Called when a market is removed from tracking
 
 	// Control
 	ctx    context.Context
@@ -116,6 +117,11 @@ func (d *DiscoveryService) OnNewMarket(fn func(*DiscoveredMarket)) {
 // with all newly discovered markets. This is useful for batch subscription.
 func (d *DiscoveryService) OnBatchDiscovered(fn func([]*DiscoveredMarket)) {
 	d.onBatchDiscovered = fn
+}
+
+// OnMarketExpired sets the callback for when markets are removed from tracking
+func (d *DiscoveryService) OnMarketExpired(fn func(*DiscoveredMarket)) {
+	d.onMarketExpired = fn
 }
 
 // Start begins the discovery loop
@@ -184,26 +190,31 @@ func (d *DiscoveryService) discoveryLoop() {
 
 // cleanupExpiredMarkets removes markets that have been expired for more than 5 minutes
 func (d *DiscoveryService) cleanupExpiredMarkets() {
-	d.marketsMu.Lock()
-	defer d.marketsMu.Unlock()
-
 	now := time.Now().Unix()
 	expiredGracePeriod := int64(5 * 60) // 5 minutes after expiry
 
-	var toDelete []string
-	for slug, market := range d.markets {
+	// Collect and delete expired markets while holding the lock
+	var toNotify []*DiscoveredMarket
+	d.marketsMu.Lock()
+	for _, market := range d.markets {
 		// Remove if expired for more than grace period
 		if now > market.EndTS+expiredGracePeriod {
-			toDelete = append(toDelete, slug)
+			toNotify = append(toNotify, market)
+			delete(d.markets, market.Slug)
+		}
+	}
+	d.marketsMu.Unlock()
+
+	// Invoke callbacks outside the lock to prevent deadlock if callback
+	// calls back into DiscoveryService methods
+	for _, market := range toNotify {
+		if d.onMarketExpired != nil {
+			d.onMarketExpired(market)
 		}
 	}
 
-	for _, slug := range toDelete {
-		delete(d.markets, slug)
-	}
-
-	if len(toDelete) > 0 {
-		d.logger.Info("Cleaned up expired markets", zap.Int("removed", len(toDelete)))
+	if len(toNotify) > 0 {
+		d.logger.Info("Cleaned up expired markets", zap.Int("removed", len(toNotify)))
 	}
 }
 

@@ -36,7 +36,9 @@ class FillInfo(BaseModel):
     signal_id: int
     asset_id: str
     slug: str
+    asset: str = ""  # e.g., 'btc', 'eth' - extracted from slug for filtering
     side: str  # 'BUY' or 'SELL'
+    token_side: str = "up"  # 'up' or 'down' - which token was traded
     price: float
     size: float
     pnl: float = 0.0
@@ -66,11 +68,25 @@ class QuoteHistoryPoint(BaseModel):
 
     timestamp_ms: int
     slug: str
+    asset: str = ""  # e.g., 'btc', 'eth' - extracted from slug for filtering
     our_bid: float | None = None
     our_ask: float | None = None
     mid_price: float
     best_bid: float
     best_ask: float
+
+
+class AssetMetrics(BaseModel):
+    """Per-asset performance metrics."""
+
+    asset: str
+    total_trades: int = 0
+    win_count: int = 0
+    win_rate: float = 0.0
+    total_pnl: float = 0.0
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    inventory: float = 0.0
 
 
 class DashboardState(BaseModel):
@@ -109,11 +125,20 @@ class DashboardState(BaseModel):
     # Equity history for chart (last N points)
     equity_history: list[tuple[int, float]] = Field(default_factory=list)
 
-    # Inventory history for chart
-    inventory_history: list[tuple[int, float]] = Field(default_factory=list)
+    # Per-asset equity history for independent asset tracking
+    equity_history_by_asset: dict[str, list[tuple[int, float]]] = Field(default_factory=dict)
 
-    # Quote history for chart
+    # Per-asset inventory history for chart
+    inventory_history_by_asset: dict[str, list[tuple[int, float]]] = Field(default_factory=dict)
+
+    # Quote history for chart (already has asset field for filtering)
     quote_history: list[QuoteHistoryPoint] = Field(default_factory=list)
+
+    # Per-asset metrics
+    metrics_by_asset: dict[str, AssetMetrics] = Field(default_factory=dict)
+
+    # Per-asset fill history
+    fills_by_asset: dict[str, list[FillInfo]] = Field(default_factory=dict)
 
     # Status
     status: str = "running"  # running, stopped, error

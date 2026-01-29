@@ -5,6 +5,7 @@ Tracks positions, calculates PnL, and maintains equity curve.
 """
 
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -58,16 +59,35 @@ class PositionTracker:
         self.strategy_id = strategy_id
         self.cash = initial_equity
         self.positions: dict[str, Position] = {}
-        self.trades: list[Trade] = []
-        self.equity_history: list[tuple[int, float]] = []
+        # Bounded deques to prevent unbounded memory growth
+        self.trades: deque[Trade] = deque(maxlen=10000)
+        self.equity_history: deque[tuple[int, float]] = deque(maxlen=10000)
+        # Per-asset equity history for independent asset tracking (smaller per-asset limit)
+        self.equity_history_by_asset: dict[str, deque[tuple[int, float]]] = {}
+
+        # Track active positions (non-zero size) for O(1) iteration
+        self._active_positions: set[str] = set()
 
         self.logger = logger.bind(
             component="position_tracker",
             strategy_id=strategy_id,
         )
 
+        # Cached metrics (invalidated on state changes)
+        self._cached_equity: float | None = None
+        self._cached_total_pnl: float | None = None
+        self._cached_realized_pnl: float | None = None
+        self._cached_unrealized_pnl: float | None = None
+
         # Record initial equity
         self.equity_history.append((time.time_ns(), initial_equity))
+
+    def _invalidate_cache(self) -> None:
+        """Invalidate cached metrics. Call this after any state change."""
+        self._cached_equity = None
+        self._cached_total_pnl = None
+        self._cached_realized_pnl = None
+        self._cached_unrealized_pnl = None
 
     def record_trade(
         self,
@@ -77,13 +97,23 @@ class PositionTracker:
         price: float,
         size: float,
         token_side: str | None = None,
+        timestamp_ns: int | None = None,
     ) -> dict[str, Any]:
         """
         Record a trade and update position.
 
+        Args:
+            asset_id: The asset identifier
+            slug: Market slug
+            side: SIDE_BUY or SIDE_SELL
+            price: Trade price
+            size: Trade size
+            token_side: 'up' or 'down' token type
+            timestamp_ns: Optional timestamp (uses current time if not provided)
+
         Returns trade dict for storage.
         """
-        timestamp_ns = time.time_ns()
+        timestamp_ns = timestamp_ns or time.time_ns()
         pnl = 0.0
 
         # Use provided token_side or default to "up"
@@ -134,10 +164,13 @@ class PositionTracker:
 
             position.size = new_size
 
-            # Reset if flat
+            # Reset if flat and update active positions set
             if abs(position.size) <= 0.001:
                 position.size = 0.0
                 position.avg_entry_price = 0.0
+                self._active_positions.discard(asset_id)
+            else:
+                self._active_positions.add(asset_id)
 
         else:  # SIDE_SELL
             # Selling tokens
@@ -173,12 +206,19 @@ class PositionTracker:
             position.size = new_size
 
             # Reset avg_entry_price only if position is flat (within tolerance)
+            # and update active positions set
             if abs(position.size) <= 0.001:
                 position.size = 0.0
                 position.avg_entry_price = 0.0
+                self._active_positions.discard(asset_id)
+            else:
+                self._active_positions.add(asset_id)
 
         position.trade_count += 1
         position.updated_at_ns = timestamp_ns
+
+        # Invalidate cached metrics since position changed
+        self._invalidate_cache()
 
         # Record trade
         trade = Trade(
@@ -221,7 +261,10 @@ class PositionTracker:
         if position and abs(position.size) > 0.001:
             # For long: profit when price goes up
             # For short: profit when price goes down
-            position.unrealized_pnl = (current_price - position.avg_entry_price) * position.size
+            new_pnl = (current_price - position.avg_entry_price) * position.size
+            if new_pnl != position.unrealized_pnl:
+                position.unrealized_pnl = new_pnl
+                self._invalidate_cache()
 
     def settle_position(self, asset_id: str, outcome: str) -> float:
         """
@@ -254,6 +297,9 @@ class PositionTracker:
         position.size = 0.0
         position.avg_entry_price = 0.0
         position.unrealized_pnl = 0.0
+
+        # Invalidate cached metrics since position changed
+        self._invalidate_cache()
 
         self.logger.info(
             "Position settled",
@@ -288,52 +334,95 @@ class PositionTracker:
         """Get all positions with non-zero size (long or short)."""
         positions = [
             self.get_position(asset_id)
-            for asset_id, pos in self.positions.items()
-            if abs(pos.size) > 0.001
+            for asset_id in self._active_positions
         ]
         return [p for p in positions if p is not None]
 
     @property
+    def active_position_ids(self) -> set[str]:
+        """Get set of asset IDs with active (non-zero) positions."""
+        return self._active_positions
+
+    @property
     def total_equity(self) -> float:
-        """Calculate total equity (cash + position value)."""
+        """Calculate total equity (cash + position value). Cached."""
+        if self._cached_equity is not None:
+            return self._cached_equity
         position_value = sum(
-            abs(pos.size) * pos.avg_entry_price + pos.unrealized_pnl
+            pos.size * pos.avg_entry_price + pos.unrealized_pnl
             for pos in self.positions.values()
             if abs(pos.size) > 0.001
         )
-        return self.cash + position_value
+        self._cached_equity = self.cash + position_value
+        return self._cached_equity
 
     @property
     def total_pnl(self) -> float:
-        """Total PnL (realized + unrealized)."""
-        realized = sum(pos.realized_pnl for pos in self.positions.values())
-        unrealized = sum(pos.unrealized_pnl for pos in self.positions.values())
-        return realized + unrealized
+        """Total PnL (realized + unrealized). Cached."""
+        if self._cached_total_pnl is not None:
+            return self._cached_total_pnl
+        self._cached_total_pnl = self.realized_pnl + self.unrealized_pnl
+        return self._cached_total_pnl
 
     @property
     def realized_pnl(self) -> float:
-        """Total realized PnL."""
-        return sum(pos.realized_pnl for pos in self.positions.values())
+        """Total realized PnL. Cached."""
+        if self._cached_realized_pnl is not None:
+            return self._cached_realized_pnl
+        self._cached_realized_pnl = sum(pos.realized_pnl for pos in self.positions.values())
+        return self._cached_realized_pnl
 
     @property
     def unrealized_pnl(self) -> float:
-        """Total unrealized PnL."""
-        return sum(pos.unrealized_pnl for pos in self.positions.values())
+        """Total unrealized PnL. Cached."""
+        if self._cached_unrealized_pnl is not None:
+            return self._cached_unrealized_pnl
+        self._cached_unrealized_pnl = sum(pos.unrealized_pnl for pos in self.positions.values())
+        return self._cached_unrealized_pnl
 
     def snapshot_equity(self) -> tuple[int, float]:
-        """Take a snapshot of current equity."""
+        """Take a snapshot of current equity (total and per-asset)."""
         timestamp_ns = time.time_ns()
         equity = self.total_equity
         self.equity_history.append((timestamp_ns, equity))
+
+        # Also snapshot per-asset equity (initial_equity + pnl)
+        # Each asset has independent capital allocation of initial_equity
+        pnl_by_asset = self.get_pnl_by_asset()
+
+        for asset, pnl in pnl_by_asset.items():
+            if asset not in self.equity_history_by_asset:
+                # Smaller limit per-asset to bound total memory
+                self.equity_history_by_asset[asset] = deque(maxlen=1000)
+            # Each asset has full initial_equity as base capital
+            asset_equity = self.initial_equity + pnl
+            self.equity_history_by_asset[asset].append((timestamp_ns, asset_equity))
+
         return timestamp_ns, equity
 
     def get_equity_history(self, limit: int = 1000) -> list[tuple[int, float]]:
         """Get equity history."""
-        return self.equity_history[-limit:]
+        # Convert deque to list for slicing
+        if limit >= len(self.equity_history):
+            return list(self.equity_history)
+        return list(self.equity_history)[-limit:]
+
+    def get_equity_history_by_asset(self, limit: int = 1000) -> dict[str, list[tuple[int, float]]]:
+        """Get per-asset equity history."""
+        result: dict[str, list[tuple[int, float]]] = {}
+        for asset, history in self.equity_history_by_asset.items():
+            if limit >= len(history):
+                result[asset] = list(history)
+            else:
+                result[asset] = list(history)[-limit:]
+        return result
 
     def get_trade_history(self, limit: int = 100) -> list[Trade]:
         """Get recent trades."""
-        return self.trades[-limit:]
+        # Convert deque to list for slicing
+        if limit >= len(self.trades):
+            return list(self.trades)
+        return list(self.trades)[-limit:]
 
     def get_pnl_by_asset(self) -> dict[str, float]:
         """Calculate PnL grouped by asset."""
@@ -343,6 +432,34 @@ class PositionTracker:
             pnl = pos.realized_pnl + pos.unrealized_pnl
             pnl_by_asset[asset] = pnl_by_asset.get(asset, 0.0) + pnl
         return pnl_by_asset
+
+    def get_equity_for_asset(self, asset: str) -> float:
+        """
+        Get equity for a specific asset.
+
+        Each asset has its own independent capital allocation:
+        - Base capital = initial_equity (e.g., $10,000 per asset)
+        - Asset equity = initial_equity + asset_pnl
+
+        This allows independent sizing per asset.
+        """
+        pnl_by_asset = self.get_pnl_by_asset()
+        asset_pnl = pnl_by_asset.get(asset.lower(), 0.0)
+        return self.initial_equity + asset_pnl
+
+    def get_cash_for_asset(self, asset: str) -> float:
+        """
+        Get available cash for a specific asset.
+
+        Approximates available margin as initial_equity minus position value for this asset.
+        """
+        # Calculate position value for this asset
+        position_value = 0.0
+        for pos in self.positions.values():
+            if self._extract_asset(pos.slug) == asset.lower():
+                if pos.size > 0:
+                    position_value += pos.size * pos.avg_entry_price
+        return self.initial_equity - position_value
 
     @staticmethod
     def _extract_asset(slug: str) -> str:

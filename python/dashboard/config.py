@@ -260,7 +260,7 @@ class DashboardConfig:
     strategies: list[StrategyConfig] = field(default_factory=list)
     # Legacy fields for backward compatibility with StrategyManager
     default_strategies: list[StrategyConfig] = field(default_factory=list)
-    max_concurrent_strategies: int = 10
+    max_concurrent_strategies: int = 20
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "DashboardConfig":
