@@ -17,7 +17,7 @@
 #include <stdint.h>
 
 #define SHM_MAGIC 0x504D4D4D  // "PMMM" - Polymarket Market Maker
-#define SHM_VERSION 1
+#define SHM_VERSION 2
 #define SHM_NAME "/polymarket_mm_shm"
 
 #define MAX_MARKETS 64
@@ -26,6 +26,8 @@
 #define MAX_POSITIONS 64
 #define MAX_SIGNALS 16
 #define MAX_OPEN_ORDERS 128
+#define MAX_IV_DATA 8
+#define MAX_IV_TENORS 6
 
 #define ASSET_ID_LEN 78      // Polymarket token IDs are up to 77 digits + null terminator
 #define SYMBOL_LEN 16
@@ -118,6 +120,26 @@ typedef struct {
 } OpenOrder;
 
 /**
+ * Single point in IV term structure
+ */
+typedef struct {
+    double days_to_expiry;              // Days to expiry for this tenor
+    double atm_iv;                      // ATM implied volatility (annualized)
+} IVTenorPoint;
+
+/**
+ * Implied volatility data for a single underlying
+ */
+typedef struct {
+    char symbol[SYMBOL_LEN];            // e.g., "BTCUSDT"
+    double atm_iv;                      // Shortest tenor IV (fallback)
+    uint64_t timestamp_ns;              // Last update timestamp
+    IVTenorPoint term_structure[MAX_IV_TENORS];
+    uint32_t num_tenors;                // Number of valid tenors
+    uint8_t _padding[4];                // Align to 8 bytes
+} ImpliedVolData;
+
+/**
  * Order signal from strategy to executor
  */
 typedef struct {
@@ -170,6 +192,11 @@ typedef struct {
     uint32_t num_open_orders;
     uint32_t _padding4;
     OpenOrder open_orders[MAX_OPEN_ORDERS];
+
+    // Implied volatility data (Go writes, Python reads)
+    uint32_t num_iv_data;
+    uint32_t _padding_iv;
+    ImpliedVolData iv_data[MAX_IV_DATA];
 
     // Strategy state
     double total_equity;

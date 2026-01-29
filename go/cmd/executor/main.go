@@ -41,6 +41,11 @@ type Config struct {
 		Symbols []string `yaml:"symbols"`
 	} `yaml:"binance"`
 
+	BinanceOptions struct {
+		Enabled     bool     `yaml:"enabled"`
+		Underlyings []string `yaml:"underlyings"`
+	} `yaml:"binance_options"`
+
 	Chainlink struct {
 		RPCURL string   `yaml:"rpc_url"`
 		Feeds  []string `yaml:"feeds"`
@@ -176,6 +181,21 @@ func main() {
 		}
 	}
 
+	// Initialize Binance Options WebSocket client (optional)
+	var optionsWS *binance.OptionsWSClient
+	if cfg.BinanceOptions.Enabled && len(cfg.BinanceOptions.Underlyings) > 0 {
+		optionsWS = binance.NewOptionsWSClient(binance.OptionsWSClientConfig{
+			Logger:      logger,
+			Underlyings: cfg.BinanceOptions.Underlyings,
+		})
+		if err := optionsWS.Connect(); err != nil {
+			logger.Error("Failed to connect to Binance Options WebSocket", zap.Error(err))
+			optionsWS = nil
+		} else {
+			defer optionsWS.Close()
+		}
+	}
+
 	// Initialize Chainlink reader (optional)
 	var chainlinkReader *chainlink.Reader
 	if cfg.Chainlink.RPCURL != "" {
@@ -196,10 +216,11 @@ func main() {
 
 	// Initialize aggregator
 	agg := aggregator.New(aggregator.Config{
-		Logger:         logger,
-		SHMWriter:      shmWriter,
-		PolyWS:         polyWS,
-		BinanceWS:      binanceWS,
+		Logger:          logger,
+		SHMWriter:       shmWriter,
+		PolyWS:          polyWS,
+		BinanceWS:       binanceWS,
+		OptionsWS:       optionsWS,
 		ChainlinkReader: chainlinkReader,
 	})
 	if err := agg.Start(); err != nil {

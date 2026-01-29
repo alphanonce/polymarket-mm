@@ -75,7 +75,8 @@ class ZSpreadQuoteConfig:
     # Volatility parameters
     vol_mode: Literal["iv", "rv", "max", "min"] = "rv"
     vol_floor: float = 0.10  # Minimum volatility - prevents near-zero vol issues
-    implied_volatility: float = 0.5  # IV to use when vol_mode="iv"
+    implied_volatility: float = 0.5  # IV to use when vol_mode="iv" (fallback)
+    iv_symbol: str | None = None  # Symbol for live IV lookup (e.g., "BTCUSDT")
 
     # Time parameters
     tau_seconds: float = 0.1  # Unhedgeable horizon (time to order replacement)
@@ -183,7 +184,7 @@ class ZSpreadQuoteModel(QuoteModel):
         # Update price history and compute volatility
         timestamp_ns = state.market.timestamp_ns
         self.price_history.add(spot, timestamp_ns)
-        vol = self._get_volatility()
+        vol = self._get_volatility(state, T)
 
         # Calculate spot shift using tau (order replacement time)
         # shift = z × σ × √tau
@@ -199,9 +200,10 @@ class ZSpreadQuoteModel(QuoteModel):
         bid = self._price_binary(lower_spot, vol, T)
         ask = self._price_binary(upper_spot, vol, T)
 
-        # Clamp to valid price range
-        bid = max(0.01, min(0.99, bid))
-        ask = max(0.01, min(0.99, ask))
+        # Only prevent negative prices from numerical issues
+        # Quote price clamping is handled by normalize_quote()
+        bid = max(0.0, bid)
+        ask = max(0.0, ask)
 
         # Maker enforcement
         if self.config.enforce_maker:
@@ -217,10 +219,23 @@ class ZSpreadQuoteModel(QuoteModel):
                 return ext_price
         return state.mid_price
 
-    def _get_volatility(self) -> float:
-        """Get volatility based on configured mode."""
+    def _get_volatility(self, state: StrategyState, T: float) -> float:
+        """Get volatility based on configured mode.
+
+        Args:
+            state: Current strategy state (for live IV lookup)
+            T: Time to expiry in years (for IV interpolation)
+        """
         rv = self.price_history.compute_volatility()
+
+        # Get IV: try live IV from SHM first, fall back to config
         iv = self.config.implied_volatility
+        if self.config.iv_symbol:
+            # Convert T from years to days for interpolation
+            tte_days = T * 365.0
+            live_iv = state.get_interpolated_iv(self.config.iv_symbol, tte_days)
+            if live_iv is not None and live_iv > 0:
+                iv = live_iv
 
         if self.config.vol_mode == "iv":
             vol = iv
@@ -242,7 +257,7 @@ class ZSpreadQuoteModel(QuoteModel):
         else:
             price = bs_binary_call(S=spot, K=K, T=T, r=0.0, sigma=vol)
 
-        return max(0.01, min(0.99, price))
+        return max(0.0, price)  # Let normalize_quote handle boundary clamping
 
     def _enforce_maker(
         self,

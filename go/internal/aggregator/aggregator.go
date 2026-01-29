@@ -21,9 +21,10 @@ type Aggregator struct {
 	shm    *shm.Writer
 
 	// Data sources
-	polyWS    *polymarket.WSClient
-	binanceWS *binance.SpotClient
-	chainlink *chainlink.Reader
+	polyWS     *polymarket.WSClient
+	binanceWS  *binance.SpotClient
+	optionsWS  *binance.OptionsWSClient
+	chainlink  *chainlink.Reader
 
 	// Market mappings (Polymarket asset ID -> external symbol)
 	marketMappings map[string]string
@@ -37,10 +38,11 @@ type Aggregator struct {
 
 // Config configures the aggregator
 type Config struct {
-	Logger         *zap.Logger
-	SHMWriter      *shm.Writer
-	PolyWS         *polymarket.WSClient
-	BinanceWS      *binance.SpotClient
+	Logger          *zap.Logger
+	SHMWriter       *shm.Writer
+	PolyWS          *polymarket.WSClient
+	BinanceWS       *binance.SpotClient
+	OptionsWS       *binance.OptionsWSClient
 	ChainlinkReader *chainlink.Reader
 }
 
@@ -57,6 +59,7 @@ func New(cfg Config) *Aggregator {
 		shm:            cfg.SHMWriter,
 		polyWS:         cfg.PolyWS,
 		binanceWS:      cfg.BinanceWS,
+		optionsWS:      cfg.OptionsWS,
 		chainlink:      cfg.ChainlinkReader,
 		marketMappings: make(map[string]string),
 		ctx:            ctx,
@@ -71,6 +74,10 @@ func New(cfg Config) *Aggregator {
 
 	if cfg.BinanceWS != nil {
 		cfg.BinanceWS.OnPriceUpdate(agg.onBinancePriceUpdate)
+	}
+
+	if cfg.OptionsWS != nil {
+		cfg.OptionsWS.OnIVUpdate(agg.onOptionsIVUpdate)
 	}
 
 	if cfg.ChainlinkReader != nil {
@@ -262,4 +269,32 @@ func (a *Aggregator) convertPolyBook(assetID string, book *polymarket.OrderbookS
 	}
 
 	return mb
+}
+
+func (a *Aggregator) onOptionsIVUpdate(symbol string, data *binance.IVData) {
+	if a.shm == nil {
+		return
+	}
+
+	// Convert binance.IVData to shm.ImpliedVolData
+	ivData := shm.ImpliedVolData{
+		Symbol:      shm.StringToSymbol(symbol),
+		ATMIV:       data.ATMIV,
+		TimestampNs: uint64(data.Timestamp.UnixNano()),
+		NumTenors:   uint32(len(data.TermStructure)),
+	}
+
+	// Copy term structure (up to MaxIVTenors)
+	for i := 0; i < len(data.TermStructure) && i < shm.MaxIVTenors; i++ {
+		ivData.TermStructure[i] = shm.IVTenorPoint{
+			DaysToExpiry: data.TermStructure[i].DaysToExpiry,
+			ATMIV:        data.TermStructure[i].ATMIV,
+		}
+	}
+
+	if err := a.shm.UpdateIVData(ivData); err != nil {
+		a.logger.Error("Failed to update IV data in SHM",
+			zap.String("symbol", symbol),
+			zap.Error(err))
+	}
 }

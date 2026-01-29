@@ -316,3 +316,39 @@ func (w *Writer) ClearSignals() {
 	atomic.StoreUint32(&w.layout.NumSignals, 0)
 	atomic.StoreUint32(&w.layout.SignalsProcessed, 0)
 }
+
+// UpdateIVData updates or adds implied volatility data for an underlying
+func (w *Writer) UpdateIVData(ivData ImpliedVolData) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	symbol := SymbolToString(ivData.Symbol)
+
+	// Find existing or add new
+	idx := -1
+	numIVData := int(w.layout.NumIVData)
+	for i := 0; i < numIVData; i++ {
+		if SymbolToString(w.layout.IVData[i].Symbol) == symbol {
+			idx = i
+			break
+		}
+	}
+
+	if idx == -1 {
+		if numIVData >= MaxIVData {
+			return fmt.Errorf("max IV data entries reached")
+		}
+		idx = numIVData
+		w.layout.NumIVData = uint32(numIVData + 1)
+	}
+
+	// Update the IV data
+	ivData.TimestampNs = uint64(time.Now().UnixNano())
+	w.layout.IVData[idx] = ivData
+
+	// Update state sequence
+	atomic.AddUint32(&w.layout.StateSequence, 1)
+	atomic.StoreUint64(&w.layout.StateTimestampNs, uint64(time.Now().UnixNano()))
+
+	return nil
+}

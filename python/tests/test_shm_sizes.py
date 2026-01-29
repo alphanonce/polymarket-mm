@@ -14,6 +14,8 @@ import ctypes
 from strategy.shm.types import (
     ASSET_ID_LEN,
     MAX_EXTERNAL_PRICES,
+    MAX_IV_DATA,
+    MAX_IV_TENORS,
     MAX_MARKETS,
     MAX_OPEN_ORDERS,
     MAX_ORDERBOOK_LEVELS,
@@ -22,6 +24,8 @@ from strategy.shm.types import (
     ORDER_ID_LEN,
     SYMBOL_LEN,
     ExternalPrice,
+    ImpliedVolData,
+    IVTenorPoint,
     MarketBook,
     OpenOrder,
     OrderSignal,
@@ -68,14 +72,28 @@ def test_order_signal_size() -> None:
     assert ctypes.sizeof(OrderSignal) == 176
 
 
+def test_iv_tenor_point_size() -> None:
+    """IVTenorPoint: 2 doubles = 16 bytes (no padding needed)."""
+    assert ctypes.sizeof(IVTenorPoint) == 16
+
+
+def test_implied_vol_data_size() -> None:
+    """ImpliedVolData with natural alignment = 136 bytes.
+
+    symbol(16) + atm_iv(8) + timestamp_ns(8) + term_structure(6*16) + num_tenors(4) + padding(4)
+    """
+    assert ctypes.sizeof(ImpliedVolData) == 136
+
+
 def test_shared_memory_layout_size() -> None:
-    """SharedMemoryLayout total size must match Go's 86880 bytes.
+    """SharedMemoryLayout total size must match Go's 87976 bytes.
 
     This is the critical test - if this fails, Python and Go will
     have misaligned views of shared memory.
     """
     # This must match the actual SHM file size created by Go
-    assert ctypes.sizeof(SharedMemoryLayout) == 86880
+    # Updated to include IV data section: 86880 + 8 (header) + 8*136 (iv_data) = 87976
+    assert ctypes.sizeof(SharedMemoryLayout) == 87976
 
 
 def test_no_pack_attribute() -> None:
@@ -87,6 +105,8 @@ def test_no_pack_attribute() -> None:
         Position,
         OpenOrder,
         OrderSignal,
+        IVTenorPoint,
+        ImpliedVolData,
         SharedMemoryLayout,
     ]
     for struct in structs:

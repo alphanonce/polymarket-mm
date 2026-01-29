@@ -34,7 +34,8 @@ class TpBSQuoteConfig:
     vol_mode: Literal["iv", "rv", "max", "min"] = "max"
     vol_floor: float = 0.10  # Minimum volatility (10%)
     vol_cap: float = 3.0  # Maximum volatility (300%)
-    implied_volatility: float = 0.5  # IV to use when vol_mode="iv"
+    implied_volatility: float = 0.5  # IV to use when vol_mode="iv" (fallback)
+    iv_symbol: str | None = None  # Symbol for live IV lookup (e.g., "BTCUSDT")
 
     # Take-profit parameters
     tp_ticks: int = 2  # Ticks for take-profit offset
@@ -50,6 +51,9 @@ class TpBSQuoteConfig:
     strike: float = 0.5  # Option strike price
     time_to_expiry_years: float = 0.1  # T in years
     reference_price_symbol: str | None = None  # External price symbol
+
+    # Real-time expiry calculation (overrides time_to_expiry_years if set)
+    end_ts_ms: int | None = None  # Market end timestamp in milliseconds
 
     # Price history parameters
     price_history_max_size: int = 1000
@@ -127,7 +131,7 @@ class TpBSQuoteModel(QuoteModel):
         # Step 2: Update price history and compute volatility
         timestamp_ns = state.market.timestamp_ns
         self.price_history.add(spot, timestamp_ns)
-        vol = self._get_volatility()
+        vol = self._get_volatility(state)
 
         # Step 3: Calculate position ratio
         position_ratio = self._get_position_ratio(state)
@@ -141,9 +145,10 @@ class TpBSQuoteModel(QuoteModel):
         # When sigma_spot is extremely small, BS pricing becomes unreliable
         if sigma_spot < 1e-8:
             half_spread = self.config.min_spread / 2
+            # Let normalize_quote handle boundary clamping
             return QuoteResult(
-                bid_price=max(0.01, spot - half_spread),
-                ask_price=min(0.99, spot + half_spread),
+                bid_price=spot - half_spread,
+                ask_price=spot + half_spread,
                 confidence=0.5,
                 reason="Zero volatility fallback",
             )
@@ -180,10 +185,37 @@ class TpBSQuoteModel(QuoteModel):
                 return ext_price
         return state.mid_price
 
-    def _get_volatility(self) -> float:
-        """Get volatility based on configured mode."""
+    def _get_time_to_expiry(self, state: StrategyState) -> float:
+        """Get time to expiry in years.
+
+        If end_ts_ms is set, calculates T in real-time from market timestamp.
+        Otherwise falls back to static time_to_expiry_years.
+        """
+        if self.config.end_ts_ms is not None:
+            now_ms = state.market.timestamp_ns // 1_000_000
+            remaining_ms = self.config.end_ts_ms - now_ms
+            if remaining_ms <= 0:
+                return 0.0  # Expired
+            return remaining_ms / 1000 / SECONDS_PER_YEAR
+        return self.config.time_to_expiry_years
+
+    def _get_volatility(self, state: StrategyState) -> float:
+        """Get volatility based on configured mode.
+
+        Args:
+            state: Current strategy state (for live IV lookup)
+        """
         rv = self.price_history.compute_volatility()
+
+        # Get IV: try live IV from SHM first, fall back to config
         iv = self.config.implied_volatility
+        if self.config.iv_symbol:
+            # Get time to expiry for interpolation
+            T = self._get_time_to_expiry(state)
+            tte_days = T * 365.0
+            live_iv = state.get_interpolated_iv(self.config.iv_symbol, tte_days)
+            if live_iv is not None and live_iv > 0:
+                iv = live_iv
 
         if self.config.vol_mode == "iv":
             vol = iv
@@ -231,8 +263,7 @@ class TpBSQuoteModel(QuoteModel):
             r=0.0,
             sigma=vol,
         )
-        # Clamp result to valid price range
-        return max(0.01, min(0.99, price))
+        return max(0.0, price)  # Let normalize_quote handle boundary clamping
 
     def _compute_ask(
         self,
@@ -261,8 +292,7 @@ class TpBSQuoteModel(QuoteModel):
             r=0.0,
             sigma=vol,
         )
-        # Clamp result to valid price range
-        z_ask = max(0.01, min(0.99, z_ask))
+        z_ask = max(0.0, z_ask)  # Let normalize_quote handle boundary clamping
 
         # Case A: No position
         if position_ratio < 1e-6:
@@ -292,8 +322,7 @@ class TpBSQuoteModel(QuoteModel):
 
             # Interpolate: no position → z_ask, full position → closest_ask
             ask = closest_ask + (z_ask - closest_ask) * (1 - position_ratio)
-            # Clamp result to valid price range
-            return max(0.01, min(0.99, ask))
+            return max(0.0, ask)  # Let normalize_quote handle boundary clamping
 
         # Case C: Position in LOSS (z_ask < avg_entry_price)
         # Use InvBS-style z interpolation (aggressive exit)
@@ -308,8 +337,7 @@ class TpBSQuoteModel(QuoteModel):
             r=0.0,
             sigma=vol,
         )
-        # Clamp result to valid price range
-        return max(0.01, min(0.99, price))
+        return max(0.0, price)  # Let normalize_quote handle boundary clamping
 
     def _enforce_min_spread(self, bid: float, ask: float) -> tuple[float, float]:
         """Ensure minimum spread between bid and ask."""
