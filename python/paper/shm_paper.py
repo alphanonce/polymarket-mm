@@ -174,7 +174,7 @@ class PaperSHMWriter:
         self._layout.num_positions = 0
         self._layout.num_quotes = 0
 
-        # Only reset trades if magic was different (new file)
+        # Only reset trades if state_sequence is 0 (fresh/new SHM file)
         if self._layout.state_sequence == 0:
             self._layout.num_trades = 0
             self._layout.trades_head = 0

@@ -359,9 +359,10 @@ func (c *OptionsWSClient) handleMarkPrice(msg *MarkPriceMessage) {
 }
 
 func (c *OptionsWSClient) updateIVData(underlying string, daysToExpiry float64, iv float64) {
-	c.ivDataMu.Lock()
-	defer c.ivDataMu.Unlock()
+	// Update data while holding lock, prepare callback data
+	var dataCopy *IVData
 
+	c.ivDataMu.Lock()
 	data, exists := c.ivData[underlying]
 	if !exists {
 		data = &IVData{
@@ -409,16 +410,21 @@ func (c *OptionsWSClient) updateIVData(underlying string, daysToExpiry float64, 
 
 	data.Timestamp = time.Now()
 
-	// Trigger callback
+	// Prepare callback data while still holding lock
 	if c.onIVUpdate != nil {
-		// Create a copy for callback
-		dataCopy := &IVData{
+		dataCopy = &IVData{
 			Symbol:        data.Symbol,
 			ATMIV:         data.ATMIV,
 			TermStructure: make([]IVTenorPoint, len(data.TermStructure)),
 			Timestamp:     data.Timestamp,
 		}
 		copy(dataCopy.TermStructure, data.TermStructure)
+	}
+	c.ivDataMu.Unlock()
+
+	// Invoke callback outside lock to prevent deadlock if callback
+	// calls GetIVData/GetAllIVData
+	if c.onIVUpdate != nil && dataCopy != nil {
 		c.onIVUpdate(underlying, dataCopy)
 	}
 }
