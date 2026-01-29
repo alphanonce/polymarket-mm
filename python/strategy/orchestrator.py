@@ -215,6 +215,7 @@ class Orchestrator:
             position=position,
             total_equity=self.shm_reader.total_equity,
             available_margin=self.shm_reader.available_margin,
+            iv_data=self.shm_reader.get_iv_dict(),
         )
 
         # Extract features
