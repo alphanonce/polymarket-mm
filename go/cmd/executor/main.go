@@ -146,6 +146,20 @@ func main() {
 			}
 		})
 
+		// Remove expired markets from SHM
+		discovery.OnMarketExpired(func(market *polymarket.DiscoveredMarket) {
+			// Remove both up and down tokens from SHM
+			if err := shmWriter.RemoveMarket(market.TokenIDUp); err != nil {
+				logger.Debug("Failed to remove up token from SHM", zap.Error(err))
+			}
+			if err := shmWriter.RemoveMarket(market.TokenIDDown); err != nil {
+				logger.Debug("Failed to remove down token from SHM", zap.Error(err))
+			}
+			logger.Info("Removed expired market from SHM",
+				zap.String("slug", market.Slug),
+			)
+		})
+
 		// Note: discovery.Start() is called later after aggregator is initialized
 		defer discovery.Stop()
 	}

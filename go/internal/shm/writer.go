@@ -244,6 +244,31 @@ func (w *Writer) RemoveOpenOrder(orderID string) error {
 	return fmt.Errorf("order not found: %s", orderID)
 }
 
+// RemoveMarket removes a market by asset ID
+func (w *Writer) RemoveMarket(assetID string) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	numMarkets := int(w.layout.NumMarkets)
+	for i := 0; i < numMarkets; i++ {
+		if AssetIDToString(w.layout.Markets[i].AssetID) == assetID {
+			// Shift remaining markets
+			for j := i; j < numMarkets-1; j++ {
+				w.layout.Markets[j] = w.layout.Markets[j+1]
+			}
+			// Clear the last slot
+			w.layout.Markets[numMarkets-1] = MarketBook{}
+			w.layout.NumMarkets = uint32(numMarkets - 1)
+
+			// Update state sequence
+			atomic.AddUint32(&w.layout.StateSequence, 1)
+			atomic.StoreUint64(&w.layout.StateTimestampNs, uint64(time.Now().UnixNano()))
+			return nil
+		}
+	}
+	return fmt.Errorf("market not found: %s", assetID)
+}
+
 // SetEquity updates the equity values
 func (w *Writer) SetEquity(total, available float64) {
 	w.mu.Lock()

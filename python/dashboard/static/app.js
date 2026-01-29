@@ -6,9 +6,12 @@
 let currentStrategyId = null;
 let strategies = [];
 let ws = null;
+let pollInterval = null;
 let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 10;
-const RECONNECT_DELAY = 2000;
+const MAX_RECONNECT_ATTEMPTS = 3;  // Reduced for faster fallback to polling
+const RECONNECT_DELAY = 1000;
+const POLL_INTERVAL_MS = 1000;  // Poll every 1 second
+let usePolling = true;  // Use HTTP polling by default (WebSocket often blocked by proxies)
 
 // Filter state
 let lastQuoteHistory = [];
@@ -91,12 +94,31 @@ async function deleteStrategy(strategyId) {
     }
 }
 
-// WebSocket Functions
-function connectWebSocket(strategyId) {
+// Connection Functions (WebSocket with HTTP Polling fallback)
+function connectToStrategy(strategyId) {
+    // Stop any existing connections
+    stopConnection();
+
+    // Try WebSocket first, fallback to polling if it fails
+    if (!usePolling) {
+        connectWebSocket(strategyId);
+    } else {
+        startPolling(strategyId);
+    }
+}
+
+function stopConnection() {
     if (ws) {
         ws.close();
+        ws = null;
     }
+    if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+    }
+}
 
+function connectWebSocket(strategyId) {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws/${strategyId}`;
 
@@ -104,7 +126,7 @@ function connectWebSocket(strategyId) {
 
     ws.onopen = () => {
         console.log('WebSocket connected');
-        setConnectionStatus(true);
+        setConnectionStatus(true, 'ws');
         reconnectAttempts = 0;
     };
 
@@ -113,15 +135,25 @@ function connectWebSocket(strategyId) {
         handleWebSocketMessage(message);
     };
 
-    ws.onclose = () => {
-        console.log('WebSocket disconnected');
-        setConnectionStatus(false);
+    ws.onclose = (event) => {
+        console.log('WebSocket disconnected', event.code);
+        setConnectionStatus(false, 'ws');
+
+        // If 403 or too many retries, switch to polling
+        if (event.code === 1006 || event.code === 403 || reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+            console.log('Switching to HTTP polling mode');
+            usePolling = true;
+            if (currentStrategyId) {
+                startPolling(currentStrategyId);
+            }
+            return;
+        }
 
         // Attempt to reconnect
         if (currentStrategyId && reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
             reconnectAttempts++;
             setTimeout(() => {
-                if (currentStrategyId) {
+                if (currentStrategyId && !usePolling) {
                     connectWebSocket(currentStrategyId);
                 }
             }, RECONNECT_DELAY);
@@ -131,6 +163,42 @@ function connectWebSocket(strategyId) {
     ws.onerror = (error) => {
         console.error('WebSocket error:', error);
     };
+}
+
+// HTTP Polling Functions
+function startPolling(strategyId) {
+    if (pollInterval) {
+        clearInterval(pollInterval);
+    }
+
+    console.log('Starting HTTP polling for strategy:', strategyId);
+    setConnectionStatus(true, 'poll');
+
+    // Initial fetch
+    fetchStrategyState(strategyId);
+
+    // Set up polling interval
+    pollInterval = setInterval(() => {
+        if (currentStrategyId === strategyId) {
+            fetchStrategyState(strategyId);
+        } else {
+            clearInterval(pollInterval);
+            pollInterval = null;
+        }
+    }, POLL_INTERVAL_MS);
+}
+
+async function fetchStrategyState(strategyId) {
+    try {
+        const response = await fetch(`/api/strategies/${strategyId}/state`);
+        if (response.ok) {
+            const state = await response.json();
+            updateDashboardState(state);
+        }
+    } catch (error) {
+        console.error('Failed to fetch strategy state:', error);
+        setConnectionStatus(false, 'poll');
+    }
 }
 
 function handleWebSocketMessage(message) {
@@ -150,9 +218,13 @@ function handleWebSocketMessage(message) {
     }
 }
 
-function setConnectionStatus(connected) {
+function setConnectionStatus(connected, mode = 'ws') {
     connectionDot.classList.toggle('connected', connected);
-    connectionText.textContent = connected ? 'Connected' : 'Disconnected';
+    if (connected) {
+        connectionText.textContent = mode === 'poll' ? 'Polling' : 'Connected';
+    } else {
+        connectionText.textContent = 'Disconnected';
+    }
 }
 
 // Render Functions
@@ -209,7 +281,7 @@ function selectStrategy(strategyId) {
     if (!strategyId) {
         currentStrategyId = null;
         mainContent.style.display = 'none';
-        if (ws) ws.close();
+        stopConnection();
         return;
     }
 
@@ -217,7 +289,7 @@ function selectStrategy(strategyId) {
     mainContent.style.display = 'grid';
     renderStrategyCards();
     updateStrategySelect();
-    connectWebSocket(strategyId);
+    connectToStrategy(strategyId);
 }
 
 function updateDashboardState(state) {
@@ -225,6 +297,11 @@ function updateDashboardState(state) {
     // Only store if this is a full state update (not already filtered)
     if (state.pnl_by_asset !== undefined) {
         lastFullState = state;
+    }
+
+    // Update asset performance grid if All tab is selected
+    if (currentAssetTab === 'all' && lastFullState) {
+        updateAssetPerformanceGrid(lastFullState);
     }
 
     // Apply asset tab filter if needed
@@ -560,10 +637,50 @@ function selectAssetTab(asset) {
         tab.classList.toggle('active', tab.dataset.asset === asset);
     });
 
-    // Filter data if we have state
-    if (lastFullState) {
-        updateDashboardState(filterStateByAsset(lastFullState, asset));
+    // Toggle between asset performance grid (All) and detailed dashboard (individual)
+    const perfGrid = document.getElementById('assetPerformanceGrid');
+    const mainContentEl = document.getElementById('mainContent');
+
+    if (asset === 'all') {
+        // Show asset performance grid, hide main dashboard
+        if (perfGrid) perfGrid.style.display = 'grid';
+        if (mainContentEl) mainContentEl.style.display = 'none';
+        updateAssetPerformanceGrid(lastFullState);
+    } else {
+        // Hide asset performance grid, show main dashboard
+        if (perfGrid) perfGrid.style.display = 'none';
+        if (mainContentEl && currentStrategyId) mainContentEl.style.display = 'grid';
+        // Filter and update dashboard for selected asset
+        if (lastFullState) {
+            updateDashboardState(filterStateByAsset(lastFullState, asset));
+        }
     }
+}
+
+// Update asset performance grid when All tab is selected
+function updateAssetPerformanceGrid(state) {
+    if (!state) return;
+
+    const pnlByAsset = state.pnl_by_asset || {};
+    const CAPITAL_PER_ASSET = 10000;  // $10,000 per asset
+
+    ['btc', 'eth', 'sol', 'xrp'].forEach(asset => {
+        const pnl = pnlByAsset[asset] || 0;
+        const percent = (pnl / CAPITAL_PER_ASSET) * 100;
+
+        const pnlEl = document.getElementById(`${asset}Pnl`);
+        const percentEl = document.getElementById(`${asset}Percent`);
+
+        if (pnlEl) {
+            pnlEl.textContent = formatCurrency(pnl);
+            pnlEl.className = `asset-perf-pnl ${pnl >= 0 ? 'positive' : 'negative'}`;
+        }
+        if (percentEl) {
+            const sign = percent >= 0 ? '+' : '';
+            percentEl.textContent = `(${sign}${percent.toFixed(2)}%)`;
+            percentEl.className = `asset-perf-percent ${percent >= 0 ? 'positive' : 'negative'}`;
+        }
+    });
 }
 
 function filterStateByAsset(state, asset) {
@@ -586,8 +703,24 @@ function filterStateByAsset(state, asset) {
     filtered.recent_fills = (state.recent_fills || []).filter(matchesAsset);
     filtered.quote_history = (state.quote_history || []).filter(matchesAsset);
 
-    // Recalculate totals for filtered data
-    filtered.total_inventory = filtered.positions.reduce((sum, p) => sum + (p.size || 0), 0);
+    // Recalculate metrics for filtered positions
+    filtered.total_pnl = filtered.positions.reduce(
+        (sum, p) => sum + (p.realized_pnl || 0) + (p.unrealized_pnl || 0), 0
+    );
+    filtered.realized_pnl = filtered.positions.reduce(
+        (sum, p) => sum + (p.realized_pnl || 0), 0
+    );
+    filtered.unrealized_pnl = filtered.positions.reduce(
+        (sum, p) => sum + (p.unrealized_pnl || 0), 0
+    );
+    filtered.total_inventory = filtered.positions.reduce(
+        (sum, p) => sum + (p.size || 0), 0
+    );
+
+    // Use asset-specific PnL if available
+    if (state.pnl_by_asset && state.pnl_by_asset[asset] !== undefined) {
+        filtered.total_pnl = state.pnl_by_asset[asset];
+    }
 
     return filtered;
 }
@@ -660,9 +793,16 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// Ping to keep WebSocket alive
+// Ping to keep WebSocket alive (only when using WebSocket mode)
 setInterval(() => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
+    if (!usePolling && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'ping' }));
     }
 }, 30000);
+
+// Periodically refresh strategy cards (for polling mode to update cards)
+setInterval(() => {
+    if (usePolling) {
+        loadStrategies();
+    }
+}, 5000);

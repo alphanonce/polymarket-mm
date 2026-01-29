@@ -12,21 +12,24 @@ import signal
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Any, Protocol
 
 import structlog
 import yaml
 
-from paper.executor import PaperExecutor
+from paper.executor import Fill, PaperExecutor
 from paper.metrics import MetricsCalculator
 from paper.position_tracker import PositionTracker
 from paper.shm_paper import PaperSHMWriter
 from paper.supabase_store import AsyncSupabaseStore, SupabaseConfig, SupabaseStore
 from paper.token_registry import TokenIdRegistry, get_global_registry
 from strategy.shm.reader import SHMReader
-from strategy.shm.types import SIDE_BUY, SIDE_SELL, MarketState
+from strategy.shm.types import MarketState
 
 logger = structlog.get_logger()
+
+# Minimum position size threshold to consider position active
+MIN_POSITION_SIZE = 0.001
 
 
 @dataclass
@@ -60,8 +63,12 @@ class PaperConfig:
             market_snapshot_interval_s=paper_data.get("market_snapshot_interval_s", 5),
             use_shm=paper_data.get("use_shm", True),
             use_direct_supabase=paper_data.get("use_direct_supabase", False),
-            supabase_url=data.get("supabase", {}).get("url", os.environ.get("SUPABASE_URL", "")),
-            supabase_key=data.get("supabase", {}).get("api_key", os.environ.get("SUPABASE_KEY", "")),
+            supabase_url=(
+                data.get("supabase", {}).get("url") or os.environ.get("SUPABASE_URL", "")
+            ),
+            supabase_key=(
+                data.get("supabase", {}).get("api_key") or os.environ.get("SUPABASE_KEY", "")
+            ),
         )
 
 
@@ -74,12 +81,12 @@ class PaperTradingRunner:
         self._running = False
 
         # Core components
-        self._shm_reader: Optional[SHMReader] = None
-        self._paper_shm: Optional[PaperSHMWriter] = None
-        self._supabase_store: Optional[SupabaseStore] = None
-        self._position_tracker: Optional[PositionTracker] = None
-        self._paper_executor: Optional[PaperExecutor] = None
-        self._metrics: Optional[MetricsCalculator] = None
+        self._shm_reader: SHMReader | None = None
+        self._paper_shm: PaperSHMWriter | None = None
+        self._supabase_store: SupabaseStore | _DummyStore | None = None
+        self._position_tracker: PositionTracker | None = None
+        self._paper_executor: PaperExecutor | None = None
+        self._metrics: MetricsCalculator | None = None
         self._token_registry: TokenIdRegistry = get_global_registry()
 
         # Tracking
@@ -127,6 +134,8 @@ class PaperTradingRunner:
             self._supabase_store = _DummyStore()
 
         # Initialize paper executor
+        assert self._position_tracker is not None
+        assert self._supabase_store is not None
         self._paper_executor = PaperExecutor(
             position_tracker=self._position_tracker,
             supabase_store=self._supabase_store,
@@ -167,13 +176,16 @@ class PaperTradingRunner:
         self._running = True
         tick_interval = self.config.tick_interval_ms / 1000.0
 
-        self._logger.info("Starting paper trading loop", tick_interval_ms=self.config.tick_interval_ms)
+        self._logger.info(
+            "Starting paper trading loop", tick_interval_ms=self.config.tick_interval_ms
+        )
 
         while self._running:
             try:
                 await self._tick()
             except Exception as e:
-                self._logger.error("Error in tick", error=str(e))
+                import traceback
+                self._logger.error("Error in tick", error=str(e), traceback=traceback.format_exc())
 
             await asyncio.sleep(tick_interval)
 
@@ -198,18 +210,20 @@ class PaperTradingRunner:
             return
 
         # Check open orders against current market
-        for asset_id, market in markets.items():
-            fills = self._paper_executor.check_open_orders(market)
-            for fill in fills:
-                self._metrics.record_trade(fill.pnl)
+        if self._paper_executor and self._metrics:
+            for asset_id, market in markets.items():
+                fills = self._paper_executor.check_open_orders(market)
+                for fill in fills:
+                    self._metrics.record_trade(fill.pnl)
 
-        # Update unrealized PnL for all positions
-        for asset_id, position in self._position_tracker.positions.items():
-            if position.size > 0:
-                market = markets.get(asset_id)
-                if market and market.bids:
-                    mid_price = (market.bids[0][0] + market.asks[0][0]) / 2 if market.asks else market.bids[0][0]
-                    self._position_tracker.update_unrealized_pnl(asset_id, mid_price)
+        # Update unrealized PnL for all positions (both long and short)
+        if self._position_tracker:
+            for asset_id, position in self._position_tracker.positions.items():
+                if abs(position.size) > MIN_POSITION_SIZE:
+                    pos_market = markets.get(asset_id)
+                    if pos_market and pos_market.bids and pos_market.asks:
+                        mid_price = (pos_market.bids[0][0] + pos_market.asks[0][0]) / 2
+                        self._position_tracker.update_unrealized_pnl(asset_id, mid_price)
 
         # Sync to paper SHM
         if self._paper_shm:
@@ -270,8 +284,8 @@ class PaperTradingRunner:
 
         # Update quotes (our current positions as context)
         for asset_id, market in markets.items():
-            position = self._position_tracker.positions.get(asset_id)
-            inventory = position.size if position else 0.0
+            quote_position = self._position_tracker.positions.get(asset_id)
+            inventory = quote_position.size if quote_position else 0.0
 
             if market.bids and market.asks:
                 best_bid = market.bids[0][0]
@@ -281,8 +295,8 @@ class PaperTradingRunner:
 
                 # Get slug from position or use registry lookup
                 slug = (
-                    position.slug
-                    if position
+                    quote_position.slug
+                    if quote_position
                     else self._token_registry.get_slug_or_fallback(asset_id, "paper")
                 )
 
@@ -361,7 +375,11 @@ class PaperTradingRunner:
             if not market.bids or not market.asks:
                 continue
 
-            position = self._position_tracker.positions.get(asset_id) if self._position_tracker else None
+            position = (
+                self._position_tracker.positions.get(asset_id)
+                if self._position_tracker
+                else None
+            )
             inventory = position.size if position else 0.0
             slug = (
                 position.slug
@@ -388,7 +406,7 @@ class PaperTradingRunner:
         """Stop the runner."""
         self._running = False
 
-    def register_market(self, market_info: dict) -> None:
+    def register_market(self, market_info: dict[str, Any]) -> None:
         """
         Register a market's token IDs for slug lookup.
 
@@ -405,7 +423,7 @@ class PaperTradingRunner:
         side: int,
         price: float,
         size: float,
-    ) -> Optional["Fill"]:
+    ) -> Fill | None:
         """Place a paper order."""
         if not self._paper_executor or not self._shm_reader:
             return None
@@ -426,7 +444,7 @@ class PaperTradingRunner:
 
         fill = self._paper_executor.process_signal(signal, market)
 
-        if fill:
+        if fill and self._metrics:
             self._metrics.record_trade(fill.pnl)
             # Write trade to SHM
             if self._paper_shm:
@@ -442,22 +460,36 @@ class PaperTradingRunner:
         return fill
 
 
+class StoreProtocol(Protocol):
+    """Protocol for paper trading data stores."""
+
+    def insert_trade(self, trade: dict[str, Any]) -> None: ...
+    def upsert_position(self, position: dict[str, Any]) -> None: ...
+    def insert_equity_snapshot(
+        self, equity: float, cash: float, position_value: float
+    ) -> None: ...
+    def upsert_metrics(self, **kwargs: Any) -> None: ...
+    def insert_market_snapshot(self, **kwargs: Any) -> None: ...
+
+
 class _DummyStore:
     """Dummy store that does nothing (used when Supabase is disabled)."""
 
-    def insert_trade(self, trade: dict) -> None:
+    def insert_trade(self, trade: dict[str, Any]) -> None:
         pass
 
-    def upsert_position(self, position: dict) -> None:
+    def upsert_position(self, position: dict[str, Any]) -> None:
         pass
 
-    def insert_equity_snapshot(self, equity: float, cash: float, position_value: float) -> None:
+    def insert_equity_snapshot(
+        self, equity: float, cash: float, position_value: float
+    ) -> None:
         pass
 
-    def upsert_metrics(self, **kwargs: object) -> None:
+    def upsert_metrics(self, **kwargs: Any) -> None:
         pass
 
-    def insert_market_snapshot(self, **kwargs: object) -> None:
+    def insert_market_snapshot(self, **kwargs: Any) -> None:
         pass
 
 

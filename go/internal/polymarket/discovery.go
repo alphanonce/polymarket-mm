@@ -57,8 +57,9 @@ type DiscoveryService struct {
 	marketsMu sync.RWMutex
 
 	// Callbacks
-	onNewMarket    func(*DiscoveredMarket)
+	onNewMarket       func(*DiscoveredMarket)
 	onBatchDiscovered func([]*DiscoveredMarket) // Called after each discovery round with newly found markets
+	onMarketExpired   func(*DiscoveredMarket)   // Called when a market is removed from tracking
 
 	// Control
 	ctx    context.Context
@@ -116,6 +117,11 @@ func (d *DiscoveryService) OnNewMarket(fn func(*DiscoveredMarket)) {
 // with all newly discovered markets. This is useful for batch subscription.
 func (d *DiscoveryService) OnBatchDiscovered(fn func([]*DiscoveredMarket)) {
 	d.onBatchDiscovered = fn
+}
+
+// OnMarketExpired sets the callback for when markets are removed from tracking
+func (d *DiscoveryService) OnMarketExpired(fn func(*DiscoveredMarket)) {
+	d.onMarketExpired = fn
 }
 
 // Start begins the discovery loop
@@ -190,16 +196,20 @@ func (d *DiscoveryService) cleanupExpiredMarkets() {
 	now := time.Now().Unix()
 	expiredGracePeriod := int64(5 * 60) // 5 minutes after expiry
 
-	var toDelete []string
-	for slug, market := range d.markets {
+	var toDelete []*DiscoveredMarket
+	for _, market := range d.markets {
 		// Remove if expired for more than grace period
 		if now > market.EndTS+expiredGracePeriod {
-			toDelete = append(toDelete, slug)
+			toDelete = append(toDelete, market)
 		}
 	}
 
-	for _, slug := range toDelete {
-		delete(d.markets, slug)
+	for _, market := range toDelete {
+		delete(d.markets, market.Slug)
+		// Notify callback for SHM cleanup
+		if d.onMarketExpired != nil {
+			d.onMarketExpired(market)
+		}
 	}
 
 	if len(toDelete) > 0 {

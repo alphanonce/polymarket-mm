@@ -536,8 +536,10 @@ class AsyncSupabaseStore(SupabaseStore):
         Enqueue a write request. Returns True if queued, False if queue is full.
         """
         try:
-            self._write_queue.put_nowait((write_type, data))
+            # Acquire lock before queue put to prevent race condition
+            # where pending_count is checked between put and increment
             with self._pending_lock:
+                self._write_queue.put_nowait((write_type, data))
                 self._pending_count += 1
             return True
         except queue.Full:

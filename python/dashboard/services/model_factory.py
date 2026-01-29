@@ -40,7 +40,7 @@ def create_quote_model(
     Returns:
         Instantiated quote model
     """
-    if config.type == "zspread":
+    if config.type in ("zspread", "zscore"):
         return ZSpreadQuoteModel(
             ZSpreadQuoteConfig(
                 z=config.z,

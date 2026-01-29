@@ -546,6 +546,52 @@
         .asset-tab:hover {
             border-color: var(--blue);
         }
+
+        /* Asset Performance Grid (for All tab) */
+        .asset-performance-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        @media (max-width: 800px) {
+            .asset-performance-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        .asset-perf-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+        }
+
+        .asset-perf-name {
+            font-weight: 600;
+            font-size: 14px;
+            margin-bottom: 8px;
+            color: var(--text-secondary);
+        }
+
+        .asset-perf-pnl {
+            font-size: 20px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .asset-perf-pnl.positive { color: var(--green); }
+        .asset-perf-pnl.negative { color: var(--red); }
+
+        .asset-perf-percent {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .asset-perf-percent.positive { color: var(--green); }
+        .asset-perf-percent.negative { color: var(--red); }
     </style>
 </head>
 <body>
@@ -622,6 +668,30 @@
             <button class="asset-tab" data-asset="eth" onclick="selectAssetTab('eth')">ETH</button>
             <button class="asset-tab" data-asset="sol" onclick="selectAssetTab('sol')">SOL</button>
             <button class="asset-tab" data-asset="xrp" onclick="selectAssetTab('xrp')">XRP</button>
+        </div>
+
+        <!-- Asset Performance Grid (shown when All is selected) -->
+        <div class="asset-performance-grid" id="assetPerformanceGrid">
+            <div class="asset-perf-card" data-asset="btc">
+                <div class="asset-perf-name">BTC</div>
+                <div class="asset-perf-pnl" id="btcPnl">$0.00</div>
+                <div class="asset-perf-percent" id="btcPercent">(0.00%)</div>
+            </div>
+            <div class="asset-perf-card" data-asset="eth">
+                <div class="asset-perf-name">ETH</div>
+                <div class="asset-perf-pnl" id="ethPnl">$0.00</div>
+                <div class="asset-perf-percent" id="ethPercent">(0.00%)</div>
+            </div>
+            <div class="asset-perf-card" data-asset="sol">
+                <div class="asset-perf-name">SOL</div>
+                <div class="asset-perf-pnl" id="solPnl">$0.00</div>
+                <div class="asset-perf-percent" id="solPercent">(0.00%)</div>
+            </div>
+            <div class="asset-perf-card" data-asset="xrp">
+                <div class="asset-perf-name">XRP</div>
+                <div class="asset-perf-pnl" id="xrpPnl">$0.00</div>
+                <div class="asset-perf-percent" id="xrpPercent">(0.00%)</div>
+            </div>
         </div>
 
         <!-- Main Grid -->
@@ -778,7 +848,7 @@
         </div>
     </div>
 
-    <script src="/static/charts.js"></script>
-    <script src="/static/app.js"></script>
+    <script src="/static/charts.js?v=3"></script>
+    <script src="/static/app.js?v=3"></script>
 </body>
 </html>

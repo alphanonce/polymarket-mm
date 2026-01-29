@@ -77,13 +77,23 @@ class PositionTracker:
         price: float,
         size: float,
         token_side: str | None = None,
+        timestamp_ns: int | None = None,
     ) -> dict[str, Any]:
         """
         Record a trade and update position.
 
+        Args:
+            asset_id: The asset identifier
+            slug: Market slug
+            side: SIDE_BUY or SIDE_SELL
+            price: Trade price
+            size: Trade size
+            token_side: 'up' or 'down' token type
+            timestamp_ns: Optional timestamp (uses current time if not provided)
+
         Returns trade dict for storage.
         """
-        timestamp_ns = time.time_ns()
+        timestamp_ns = timestamp_ns or time.time_ns()
         pnl = 0.0
 
         # Use provided token_side or default to "up"
@@ -297,7 +307,7 @@ class PositionTracker:
     def total_equity(self) -> float:
         """Calculate total equity (cash + position value)."""
         position_value = sum(
-            abs(pos.size) * pos.avg_entry_price + pos.unrealized_pnl
+            pos.size * pos.avg_entry_price + pos.unrealized_pnl
             for pos in self.positions.values()
             if abs(pos.size) > 0.001
         )

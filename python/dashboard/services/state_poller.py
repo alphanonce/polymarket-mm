@@ -299,8 +299,10 @@ class StatePoller:
         metrics_total_pnl = metrics.get("total_pnl", 0.0)
         calculated_total_pnl = total_realized_pnl + total_unrealized_pnl
         total_pnl = calculated_total_pnl if metrics_total_pnl == 0 else metrics_total_pnl
-        realized_pnl = total_realized_pnl if metrics.get("realized_pnl", 0.0) == 0 else metrics.get("realized_pnl", 0.0)
-        unrealized_pnl = total_unrealized_pnl if metrics.get("unrealized_pnl", 0.0) == 0 else metrics.get("unrealized_pnl", 0.0)
+        metrics_realized = metrics.get("realized_pnl", 0.0)
+        metrics_unrealized = metrics.get("unrealized_pnl", 0.0)
+        realized_pnl = total_realized_pnl if metrics_realized == 0 else metrics_realized
+        unrealized_pnl = total_unrealized_pnl if metrics_unrealized == 0 else metrics_unrealized
         current_equity = total_pnl + starting_capital
 
         # Build quotes from SHM (live orderbook) or market snapshots (historical)
